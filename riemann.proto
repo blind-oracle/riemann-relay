@@ -1,0 +1,45 @@
+syntax = "proto3";
+package main;
+
+message State {
+  int64 time = 1;
+  string state = 2;
+  string service = 3;
+  string host = 4;
+  string description = 5;
+  bool once = 6;
+  repeated string tags = 7;
+  float ttl = 8;
+}
+
+message Event {
+  int64 time = 1;
+  string state = 2;
+  string service = 3;
+  string host = 4;
+  string description = 5;
+  repeated string tags = 7;
+  float ttl = 8;
+  repeated Attribute attributes = 9;
+  int64 time_micros = 10;
+  sint64 metric_sint64 = 13;
+  double metric_d = 14;
+  float metric_f = 15;
+}
+
+message Query {
+  string string = 1;
+}
+
+message Msg {
+  bool ok = 2;
+  string error = 3;
+  repeated State states = 4;
+  Query query = 5;
+  repeated Event events = 6;
+}
+
+message Attribute {
+  string key = 1;
+  string value = 2;
+}

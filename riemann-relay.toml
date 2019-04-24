@@ -1,0 +1,10 @@
+listen = [ "127.0.0.1:1234" ]
+buffer_size = 100000
+stats_interval = "5s"
+timeout = "5s"
+
+[output.carbon1]
+type = "carbon"
+algo = "hash"
+targets = [ "127.0.0.1:1235" ]
+buffer_size = 100000
