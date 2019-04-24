@@ -2,10 +2,10 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -14,25 +14,45 @@ import (
 )
 
 var (
-	processed uint64
+	stats struct {
+		processed uint64
+	}
 )
 
 func main() {
-	//log.SetLevel(log.DebugLevel)
-	ctxShutdown, ctxCancel := context.WithCancel(context.Background())
+	var (
+		outputs []*output
+		wg      sync.WaitGroup
+	)
+
+	chanClose, chanDrain := make(chan struct{}), make(chan struct{})
 
 	var err error
 	configFile := flag.String("config", "/etc/riemann-relay.toml", "Path to a config file")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
+
+	if *debug {
+		log.SetLevel(log.DebugLevel)
+	}
 
 	if err = configLoad(*configFile); err != nil {
 		log.Fatalf("Unable to load config file: %s", err)
 	}
 
-	chanInput := make(chan *Event, cfg.BufferSize)
+	chanInput := make(chan []*Event, cfg.BufferSize)
 	lis, err := newListener(cfg.Listen, cfg.Timeout.Duration, chanInput)
 	if err != nil {
 		log.Fatalf("Unable to set up listener: %s", err)
+	}
+
+	for _, ocfg := range cfg.Outputs {
+		o, err := newOutput(ocfg)
+		if err != nil {
+			log.Fatalf("Unable to init output '%s': %s", ocfg.Name, err)
+		}
+
+		outputs = append(outputs, o)
 	}
 
 	go func() {
@@ -43,41 +63,82 @@ func main() {
 			switch sig {
 			case os.Interrupt, syscall.SIGTERM:
 				log.Warnf("Got SIGTERM/Ctrl+C, shutting down")
-				ctxCancel()
+				close(chanClose)
+				return
 			}
 		}
 	}()
 
+	wg.Add(1)
 	if cfg.StatsInterval.Duration > 0 {
 		go func() {
+			defer wg.Done()
 			t := time.NewTicker(cfg.StatsInterval.Duration)
 			defer t.Stop()
 
 			for {
 				select {
-				case <-ctxShutdown.Done():
+				case <-chanClose:
 					return
+
 				case <-t.C:
-					log.Infof("Events processed: %d", atomic.LoadUint64(&processed))
+					log.Infof("Events processed: %d", atomic.LoadUint64(&stats.processed))
 				}
 			}
 		}()
 	}
 
+	pushToOutputs := func(batch []*Event) {
+		for _, o := range outputs {
+			o.chanIn <- batch
+		}
+
+		atomic.AddUint64(&stats.processed, uint64(len(batch)))
+	}
+
+	wg.Add(1)
 	go func() {
-		var e *Event
+		defer wg.Done()
+		var (
+			batch []*Event
+			ok    bool
+		)
+
 		for {
 			select {
-			case <-ctxShutdown.Done():
-				return
-			case e = <-chanInput:
-				log.Infof("%+v", e)
-				log.Info(eventToCarbon(e))
-				atomic.AddUint64(&processed, 1)
+			case <-chanDrain:
+				log.Info("Draining input buffer...")
+
+				c := 0
+				for {
+					batch, ok = <-chanInput
+					if !ok {
+						log.Infof("Input buffer drained (%d batches)", c)
+						return
+					}
+
+					pushToOutputs(batch)
+					c++
+				}
+
+			case batch, ok = <-chanInput:
+				if !ok {
+					continue
+				}
+
+				pushToOutputs(batch)
 			}
 		}
 	}()
 
-	<-ctxShutdown.Done()
+	<-chanClose
 	lis.Close()
+	close(chanInput)
+	close(chanDrain)
+	wg.Wait()
+
+	for _, o := range outputs {
+		o.Close()
+	}
+
 }

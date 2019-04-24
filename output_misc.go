@@ -4,13 +4,13 @@ import (
 	"fmt"
 )
 
-func eventToCarbon(e *Event) (string, error) {
+func eventToCarbon(e *Event) ([]byte, error) {
 	pfx, err := getPrefix(e)
 	if err != nil {
-		return "", err
+		return []byte{}, err
 	}
 
-	return fmt.Sprintf("%s.%s.%s %f %d", pfx, e.Host, e.Service, e.MetricF, e.Time), nil
+	return []byte(fmt.Sprintf("%s.%s.%s %f %d", pfx, e.Host, e.Service, e.MetricF, e.Time)), nil
 }
 
 func getPrefix(e *Event) (string, error) {

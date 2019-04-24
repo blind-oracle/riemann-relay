@@ -7,4 +7,6 @@ timeout = "5s"
 type = "carbon"
 algo = "hash"
 targets = [ "127.0.0.1:1235" ]
-buffer_size = 100000
+#buffer_size = 100000
+#batch_timeout = "1s"
+#batch_size = 50

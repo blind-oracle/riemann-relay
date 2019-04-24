@@ -22,17 +22,19 @@ type outputCfg struct {
 	Type           string
 	Algo           string
 	Targets        []string
-	ConnectTimeout duration
+	ConnectTimeout duration `toml:"connect_timeout"`
 	Timeout        duration
-	BufferSize     int
+	BufferSize     int      `toml:"buffer_size"`
+	BatchSize      int      `toml:"batch_size"`
+	BatchTimeout   duration `toml:"batch_timeout"`
 }
 
 type config struct {
 	Listen        []string
 	Timeout       duration
-	StatsInterval duration             `toml:"stats_interval"`
-	BufferSize    int                  `toml:"buffer_size"`
-	Outputs       map[string]outputCfg `toml:"output"`
+	StatsInterval duration              `toml:"stats_interval"`
+	BufferSize    int                   `toml:"buffer_size"`
+	Outputs       map[string]*outputCfg `toml:"output"`
 }
 
 func defaultConfig() config {
@@ -40,9 +42,9 @@ func defaultConfig() config {
 		Listen:        []string{"127.0.0.1:32167"},
 		StatsInterval: duration{60 * time.Second},
 		Timeout:       duration{30 * time.Second},
-		BufferSize:    100000,
+		BufferSize:    50000,
 
-		Outputs: map[string]outputCfg{},
+		Outputs: map[string]*outputCfg{},
 	}
 }
 
@@ -70,6 +72,14 @@ func configLoad(file string) error {
 
 		if o.BufferSize == 0 {
 			o.BufferSize = 50000
+		}
+
+		if o.BatchSize == 0 {
+			o.BatchSize = 50
+		}
+
+		if o.BatchTimeout.Duration == 0 {
+			o.BatchTimeout.Duration = 1 * time.Second
 		}
 	}
 

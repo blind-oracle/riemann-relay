@@ -17,21 +17,22 @@ type listener struct {
 	listeners []*net.TCPListener
 	timeout   time.Duration
 
-	chanOut  chan *Event
+	chanOut  chan []*Event
 	shutdown chan struct{}
 
 	acceptWg sync.WaitGroup
 	connWg   sync.WaitGroup
 
 	stats struct {
-		dropped uint64
+		received uint64
+		dropped  uint64
 	}
 
 	conns map[string]*net.TCPConn
 	sync.Mutex
 }
 
-func newListener(addrs []string, timeout time.Duration, chanOut chan *Event) (*listener, error) {
+func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (*listener, error) {
 	l := &listener{
 		timeout:  timeout,
 		chanOut:  chanOut,
@@ -99,6 +100,8 @@ func (l *listener) accept(lis *net.TCPListener) {
 
 		l.connWg.Add(1)
 		log.Infof("New connection on '%s' from '%s'", lis.Addr(), c.RemoteAddr())
+
+		// Add connection to a map
 		l.Lock()
 		id := c.RemoteAddr().String()
 		if cc, ok := l.conns[id]; ok {
@@ -107,7 +110,8 @@ func (l *listener) accept(lis *net.TCPListener) {
 		}
 		l.conns[id] = c
 		l.Unlock()
-		go l.handleConnection(newTimeoutConn(c, l.timeout))
+
+		go l.handleConnection(newTimeoutConn(c, l.timeout, l.timeout))
 	}
 }
 
@@ -115,6 +119,8 @@ func (l *listener) handleConnection(c net.Conn) {
 	defer func() {
 		c.Close()
 		log.Infof("Connection from '%s' closed", c.RemoteAddr())
+
+		// Remove connection from a map
 		l.Lock()
 		delete(l.conns, c.RemoteAddr().String())
 		l.Unlock()
@@ -134,8 +140,6 @@ func (l *listener) handleConnection(c net.Conn) {
 
 			return
 		}
-
-		log.Debugf("Message processed")
 	}
 }
 
@@ -161,14 +165,13 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 
 	log.Debugf("Message with %d events decoded", len(msg.Events))
 
-	for _, ev := range msg.Events {
-		select {
-		case l.chanOut <- ev:
-		case <-l.shutdown:
-			return
-		default:
-			atomic.AddUint64(&l.stats.dropped, 1)
-		}
+	select {
+	case l.chanOut <- msg.Events:
+		atomic.AddUint64(&l.stats.received, uint64(len(msg.Events)))
+	case <-l.shutdown:
+		return
+	default:
+		atomic.AddUint64(&l.stats.dropped, 1)
 	}
 
 	msg.Reset()
@@ -185,6 +188,7 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 		return fmt.Errorf("Unable to write reply Protobuf body: %s", err)
 	}
 
+	log.Debug("Message processing finished, OK sent")
 	return
 }
 

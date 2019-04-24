@@ -7,23 +7,21 @@ import (
 
 // TimeoutConn automatically applies a deadline on a conn upon every call
 type TimeoutConn struct {
-	*net.TCPConn
-	timeout time.Duration
+	net.Conn
+	readTimeout  time.Duration
+	writeTimeout time.Duration
 }
 
-func newTimeoutConn(conn *net.TCPConn, timeout time.Duration) *TimeoutConn {
+func newTimeoutConn(conn net.Conn, readTimeout time.Duration, writeTimeout time.Duration) *TimeoutConn {
 	return &TimeoutConn{
-		TCPConn: conn,
-		timeout: timeout,
+		Conn:         conn,
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
 	}
 }
 
-func (t *TimeoutConn) setDL() error {
-	if t.timeout == 0 {
-		return nil
-	}
-
-	if err := t.TCPConn.SetDeadline(time.Now().Add(t.timeout)); err != nil {
+func (t *TimeoutConn) setDL(timeout time.Duration) error {
+	if err := t.Conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return err
 	}
 
@@ -31,17 +29,21 @@ func (t *TimeoutConn) setDL() error {
 }
 
 func (t *TimeoutConn) Write(p []byte) (n int, err error) {
-	if err = t.setDL(); err != nil {
-		return 0, err
+	if t.writeTimeout > 0 {
+		if err = t.Conn.SetWriteDeadline(time.Now().Add(t.writeTimeout)); err != nil {
+			return
+		}
 	}
 
-	return t.TCPConn.Write(p)
+	return t.Conn.Write(p)
 }
 
 func (t *TimeoutConn) Read(p []byte) (n int, err error) {
-	if err = t.setDL(); err != nil {
-		return 0, err
+	if t.readTimeout > 0 {
+		if err = t.Conn.SetReadDeadline(time.Now().Add(t.readTimeout)); err != nil {
+			return
+		}
 	}
 
-	return t.TCPConn.Read(p)
+	return t.Conn.Read(p)
 }

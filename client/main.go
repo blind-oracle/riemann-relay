@@ -20,6 +20,9 @@ func main() {
 			Service: "hello",
 			Metric:  100,
 			Tags:    []string{"hello"},
+			Attributes: map[string]string{
+				"prefix": "aabbccdd",
+			},
 		})
 	}
 
