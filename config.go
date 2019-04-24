@@ -7,11 +7,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const (
-	outputTypeCarbon  = "carbon"
-	outputTypeRiemann = "riemann"
-)
-
 type duration struct {
 	time.Duration
 }
@@ -22,7 +17,8 @@ func (d *duration) UnmarshalText(text []byte) error {
 	return err
 }
 
-type output struct {
+type outputCfg struct {
+	Name           string
 	Type           string
 	Algo           string
 	Targets        []string
@@ -34,9 +30,9 @@ type output struct {
 type config struct {
 	Listen        []string
 	Timeout       duration
-	StatsInterval duration          `toml:"stats_interval"`
-	BufferSize    int               `toml:"buffer_size"`
-	Outputs       map[string]output `toml:"output"`
+	StatsInterval duration             `toml:"stats_interval"`
+	BufferSize    int                  `toml:"buffer_size"`
+	Outputs       map[string]outputCfg `toml:"output"`
 }
 
 func defaultConfig() config {
@@ -46,7 +42,7 @@ func defaultConfig() config {
 		Timeout:       duration{30 * time.Second},
 		BufferSize:    100000,
 
-		Outputs: map[string]output{},
+		Outputs: map[string]outputCfg{},
 	}
 }
 
@@ -61,7 +57,9 @@ func configLoad(file string) error {
 		return fmt.Errorf("No outputs defined")
 	}
 
-	for _, o := range cfg.Outputs {
+	for n, o := range cfg.Outputs {
+		o.Name = n
+
 		if o.ConnectTimeout.Duration == 0 {
 			o.ConnectTimeout.Duration = 5 * time.Second
 		}
