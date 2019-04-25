@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
 
 func eventToCarbon(e *Event) ([]byte, error) {
@@ -21,4 +22,8 @@ func getPrefix(e *Event) (string, error) {
 	}
 
 	return "", fmt.Errorf("No 'prefix' found in attributes")
+}
+
+func isErrClosedConn(err error) bool {
+	return strings.Contains(err.Error(), "use of closed network connection")
 }

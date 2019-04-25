@@ -5,8 +5,9 @@ timeout = "5s"
 
 [output.carbon1]
 type = "carbon"
-algo = "hash"
-targets = [ "127.0.0.1:1235" ]
+algo = "roundrobin"
+targets = [ "127.0.0.1:1235", "127.0.0.1:1236", "127.0.0.1:1237", "127.0.0.1:1238" ]
+#targets = [ "127.0.0.1:1235" ]
 #buffer_size = 100000
 #batch_timeout = "1s"
 #batch_size = 50

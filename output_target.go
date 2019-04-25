@@ -36,6 +36,7 @@ type target struct {
 		dropped    uint64
 	}
 
+	chanOpen     chan struct{}
 	chanClose    chan struct{}
 	chanDispatch chan struct{}
 	chanIn       chan *Event
@@ -49,7 +50,10 @@ type target struct {
 
 	wg         sync.WaitGroup
 	wgDispatch sync.WaitGroup
+
+	connMtx sync.RWMutex
 	sync.RWMutex
+	*logger
 }
 
 func (t *target) run() {
@@ -61,11 +65,7 @@ func (t *target) run() {
 	t.wg.Add(1)
 	go t.periodicFlush()
 
-	if cfg.StatsInterval.Duration > 0 {
-		t.wg.Add(1)
-		go t.statsTicker()
-	}
-
+	t.connMtx.Lock()
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -77,7 +77,13 @@ func (t *target) run() {
 			if err != nil {
 				atomic.AddUint64(&t.stats.connFailed, 1)
 				t.Errorf("Connection failed, will retry in 5 sec: %s", err)
-				time.Sleep(5 * time.Second)
+
+				select {
+				case <-t.ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+
 				continue
 			}
 
@@ -90,12 +96,16 @@ func (t *target) run() {
 
 			t.setAlive(true)
 			t.Infof("Connection established")
+			t.chanClose = make(chan struct{})
+			t.connMtx.Unlock()
 
 			select {
 			case <-t.ctx.Done():
 				return
 
 			case <-t.chanClose:
+				t.connMtx.Lock()
+				t.Errorf("Connection broken")
 				time.Sleep(5 * time.Second)
 			}
 		}
@@ -121,8 +131,7 @@ func (t *target) checkEOF() {
 			t.disconnect()
 			return
 		} else {
-			t.Warnf("Unexpected read error: %s", err)
-			t.disconnect()
+			// Some other error, probably closed connection etc, don't care
 			return
 		}
 	}
@@ -141,19 +150,27 @@ func (t *target) isAlive() bool {
 }
 
 func (t *target) disconnect() {
-	if !t.isAlive() {
+	t.Lock()
+	defer t.Unlock()
+
+	if !t.alive {
 		return
 	}
 
 	t.conn.Close()
-	t.setAlive(false)
-	t.chanClose <- struct{}{}
+	t.alive = false
+	close(t.chanClose)
 }
 
 func (t *target) Close() {
 	t.Infof("Waiting for the dispatcher to flush...")
 	close(t.chanIn)
 	close(t.chanDispatch)
+
+	if !t.isAlive() {
+		t.connMtx.Unlock()
+	}
+
 	t.wgDispatch.Wait()
 	t.Infof("Dispatcher flushed")
 
@@ -220,7 +237,6 @@ func (t *target) dispatch() {
 			}
 
 			t.push(e)
-			atomic.AddUint64(&t.stats.processed, 1)
 		}
 	}
 }
@@ -252,13 +268,37 @@ func (t *target) push(e *Event) {
 	t.batch.Lock()
 	defer t.batch.Unlock()
 
+	// Fall out if chan is already closed
+	select {
+	case <-t.chanDispatch:
+		return
+	default:
+	}
+
 	t.batch.buf[t.batch.count] = e
 	t.batch.count++
+	atomic.AddUint64(&t.stats.processed, 1)
 
 	if t.batch.count >= t.batch.size {
 		t.Debugf("Buffer is full (%d/%d), flushing", t.batch.count, t.batch.size)
-		t.flush()
-		return
+
+	loop:
+		for {
+			select {
+			case <-t.chanDispatch:
+				return
+			default:
+				if err := t.flush(); err == nil {
+					break loop
+				}
+
+				select {
+				case <-t.chanDispatch:
+					return
+				case <-time.After(1 * time.Second):
+				}
+			}
+		}
 	}
 
 	t.Debugf("Buffer is now %d/%d", t.batch.count, t.batch.size)
@@ -300,51 +340,31 @@ func (t *target) tryFlush() {
 }
 
 // Assumes locked batch
-func (t *target) flush() {
+func (t *target) flush() (err error) {
+	t.connMtx.Lock()
+	defer t.connMtx.Unlock()
+
 	t.Debugf("Flushing batch (%d events)", t.batch.count)
 	ts := time.Now()
 
-	if err := t.writeBatch(t.batch.buf[:t.batch.count]); err != nil {
-		t.Errorf("Unable to flush batch: %s", err)
-		t.disconnect()
+	if err = t.writeBatch(t.batch.buf[:t.batch.count]); err != nil {
+		if !isErrClosedConn(err) {
+			t.Errorf("Unable to flush batch: %s", err)
+			t.disconnect()
+		}
+
 		return
 	}
 
 	t.batch.count = 0
 	t.Debugf("Batch flushed in %.2f sec", time.Since(ts).Seconds())
+	return
 }
 
-func (t *target) statsTicker() {
-	defer t.wg.Done()
-	tick := time.NewTicker(cfg.StatsInterval.Duration)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-t.ctx.Done():
-			return
-		case <-tick.C:
-			t.Infof("dropped %d connFailed %d", atomic.LoadUint64(&t.stats.dropped), atomic.LoadUint64(&t.stats.connFailed))
-		}
-	}
-}
-
-func (t *target) logHdr(msg string) string {
-	return t.host + ": " + msg
-}
-
-func (t *target) Debugf(msg string, args ...interface{}) {
-	t.o.Debugf(t.logHdr(msg), args...)
-}
-
-func (t *target) Infof(msg string, args ...interface{}) {
-	t.o.Infof(t.logHdr(msg), args...)
-}
-
-func (t *target) Warnf(msg string, args ...interface{}) {
-	t.o.Warnf(t.logHdr(msg), args...)
-}
-
-func (t *target) Errorf(msg string, args ...interface{}) {
-	t.o.Errorf(t.logHdr(msg), args...)
+func (t *target) getStats() string {
+	return fmt.Sprintf("processed %d dropped %d connFailed %d",
+		atomic.LoadUint64(&t.stats.processed),
+		atomic.LoadUint64(&t.stats.dropped),
+		atomic.LoadUint64(&t.stats.connFailed),
+	)
 }

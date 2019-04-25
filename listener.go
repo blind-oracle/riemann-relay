@@ -10,7 +10,6 @@ import (
 	"time"
 
 	pb "github.com/golang/protobuf/proto"
-	log "github.com/sirupsen/logrus"
 )
 
 type listener struct {
@@ -30,6 +29,7 @@ type listener struct {
 
 	conns map[string]*net.TCPConn
 	sync.Mutex
+	*logger
 }
 
 func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (*listener, error) {
@@ -38,6 +38,7 @@ func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (
 		chanOut:  chanOut,
 		shutdown: make(chan struct{}),
 		conns:    map[string]*net.TCPConn{},
+		logger:   &logger{"Listener"},
 	}
 
 	for _, addr := range addrs {
@@ -47,7 +48,7 @@ func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (
 		}
 
 		l.listeners = append(l.listeners, lis)
-		log.Infof("Listening to '%s'", addr)
+		l.Infof("Listening to '%s'", addr)
 
 		l.acceptWg.Add(1)
 		go l.accept(lis)
@@ -78,7 +79,7 @@ func (l *listener) statsTicker() {
 		case <-l.shutdown:
 			return
 		case <-t.C:
-			log.Infof("Listener: dropped %d", atomic.LoadUint64(&l.stats.dropped))
+			l.Infof("dropped %d", atomic.LoadUint64(&l.stats.dropped))
 		}
 	}
 }
@@ -91,21 +92,21 @@ func (l *listener) accept(lis *net.TCPListener) {
 		if err != nil {
 			select {
 			case <-l.shutdown:
-				log.Infof("Accepter '%s' shutting down", lis.Addr())
+				l.Infof("Accepter '%s': exiting", lis.Addr())
 				return
 			default:
-				log.Errorf("Error accepting on '%s': %s", lis.Addr(), err)
+				l.Errorf("%s: Error accepting : %s", lis.Addr(), err)
 			}
 		}
 
 		l.connWg.Add(1)
-		log.Infof("New connection on '%s' from '%s'", lis.Addr(), c.RemoteAddr())
+		l.Infof("Connection to '%s' from '%s'", lis.Addr(), c.RemoteAddr())
 
 		// Add connection to a map
 		l.Lock()
 		id := c.RemoteAddr().String()
 		if cc, ok := l.conns[id]; ok {
-			log.Warnf("Duplicate connection from '%s', closing old one", id)
+			l.Warnf("Duplicate connection from '%s', closing old one", id)
 			cc.Close()
 		}
 		l.conns[id] = c
@@ -116,13 +117,15 @@ func (l *listener) accept(lis *net.TCPListener) {
 }
 
 func (l *listener) handleConnection(c net.Conn) {
+	peer := c.RemoteAddr().String()
+
 	defer func() {
 		c.Close()
-		log.Infof("Connection from '%s' closed", c.RemoteAddr())
+		l.Infof("%s: Connection from closed", peer)
 
 		// Remove connection from a map
 		l.Lock()
-		delete(l.conns, c.RemoteAddr().String())
+		delete(l.conns, peer)
 		l.Unlock()
 		l.connWg.Done()
 	}()
@@ -134,7 +137,7 @@ func (l *listener) handleConnection(c net.Conn) {
 			case <-l.shutdown:
 			default:
 				if err != io.EOF {
-					log.Warnf("Unable to process message: %s", err)
+					l.Warnf("%s: Unable to process message: %s", peer, err)
 				}
 			}
 
@@ -144,6 +147,8 @@ func (l *listener) handleConnection(c net.Conn) {
 }
 
 func (l *listener) processMessage(c net.Conn) (err error) {
+	peer := c.RemoteAddr().String()
+
 	var hdr uint32
 	if err = binary.Read(c, binary.BigEndian, &hdr); err != nil {
 		if err == io.EOF {
@@ -163,7 +168,7 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 		return fmt.Errorf("Unable to unmarshal Protobuf: %s", err)
 	}
 
-	log.Debugf("Message with %d events decoded", len(msg.Events))
+	l.Debugf("%s: Message with %d events decoded", peer, len(msg.Events))
 
 	select {
 	case l.chanOut <- msg.Events:
@@ -188,12 +193,12 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 		return fmt.Errorf("Unable to write reply Protobuf body: %s", err)
 	}
 
-	log.Debug("Message processing finished, OK sent")
+	l.Debugf("%s: Message processing finished, OK sent", peer)
 	return
 }
 
 func (l *listener) Close() {
-	log.Info("Listener shutting down...")
+	l.Infof("Closing...")
 	close(l.shutdown)
 
 	// Shut down listeners
@@ -204,15 +209,14 @@ func (l *listener) Close() {
 
 	// Close active connections
 	l.Lock()
-	log.Infof("%d active connections, closing them", len(l.conns))
+	l.Infof("%d active connections, closing", len(l.conns))
 	for _, c := range l.conns {
-		log.Infof("Closing connection from '%s'", c.RemoteAddr())
 		c.Close()
 	}
 	l.Unlock()
 	l.connWg.Wait()
 
-	log.Info("Listener closed")
+	l.Infof("Closed")
 }
 
 func readPacket(r io.Reader, p []byte) error {

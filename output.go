@@ -5,14 +5,22 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/segmentio/fasthash/fnv1a"
-	log "github.com/sirupsen/logrus"
+	"github.com/cespare/xxhash"
 )
 
 type outputAlgo int
 type outputType int
 type writeBatchFunc func([]*Event) error
+
+func (a outputAlgo) String() string {
+	return outputAlgoMapRev[a]
+}
+
+func (t outputType) String() string {
+	return outputTypeMapRev[t]
+}
 
 const (
 	outputTypeCarbon outputType = iota
@@ -38,7 +46,20 @@ var (
 		"roundrobin": outputAlgoRoundRobin,
 		"broadcast":  outputAlgoBroadcast,
 	}
+
+	outputTypeMapRev = map[outputType]string{}
+	outputAlgoMapRev = map[outputAlgo]string{}
 )
+
+func init() {
+	for k, v := range outputTypeMap {
+		outputTypeMapRev[v] = k
+	}
+
+	for k, v := range outputAlgoMap {
+		outputAlgoMapRev[v] = k
+	}
+}
 
 type output struct {
 	name string
@@ -47,7 +68,7 @@ type output struct {
 	algo outputAlgo
 
 	tgts    []*target
-	tgtCnt  int
+	tgtCnt  uint64
 	tgtNext int
 
 	wg sync.WaitGroup
@@ -64,26 +85,30 @@ type output struct {
 	}
 
 	chanIn chan []*Event
+	*logger
 }
 
-func newOutput(cfg *outputCfg) (*output, error) {
-	typ, ok := outputTypeMap[cfg.Type]
+func newOutput(c *outputCfg) (*output, error) {
+	typ, ok := outputTypeMap[c.Type]
 	if !ok {
-		return nil, fmt.Errorf("Unknown output type '%s'", cfg.Type)
+		return nil, fmt.Errorf("Unknown output type '%s'", c.Type)
 	}
 
-	algo, ok := outputAlgoMap[cfg.Algo]
+	algo, ok := outputAlgoMap[c.Algo]
 	if !ok {
-		return nil, fmt.Errorf("Unknown algorithm '%s'", cfg.Algo)
+		return nil, fmt.Errorf("Unknown algorithm '%s'", c.Algo)
 	}
 
 	o := &output{
-		name:   cfg.Name,
+		name:   c.Name,
 		typ:    typ,
 		algo:   algo,
-		tgtCnt: len(cfg.Targets),
+		tgtCnt: uint64(len(c.Targets)),
 		chanIn: make(chan []*Event),
+		logger: &logger{c.Name},
 	}
+
+	o.Infof("Starting output (type '%s', algo '%s')", typ, algo)
 
 	switch algo {
 	case outputAlgoFailover:
@@ -105,18 +130,17 @@ func newOutput(cfg *outputCfg) (*output, error) {
 
 	o.ctx, o.ctxCancel = context.WithCancel(context.Background())
 
-	for _, h := range cfg.Targets {
+	for _, h := range c.Targets {
 		t := &target{
 			host:        h,
 			typ:         typ,
-			connTimeout: cfg.ConnectTimeout.Duration,
-			timeout:     cfg.Timeout.Duration,
+			connTimeout: c.ConnectTimeout.Duration,
+			timeout:     c.Timeout.Duration,
 			o:           o,
 
-			chanClose:    make(chan struct{}),
 			chanDispatch: make(chan struct{}),
-
-			chanIn: make(chan *Event, cfg.BufferSize),
+			chanIn:       make(chan *Event, cfg.BufferSize),
+			logger:       &logger{fmt.Sprintf("%s: %s", c.Name, h)},
 		}
 
 		t.ctx, t.ctxCancel = context.WithCancel(context.Background())
@@ -128,9 +152,9 @@ func newOutput(cfg *outputCfg) (*output, error) {
 			t.writeBatch = t.writeBatchRiemann
 		}
 
-		t.batch.buf = make([]*Event, cfg.BatchSize)
-		t.batch.size = cfg.BatchSize
-		t.batch.timeout = cfg.BatchTimeout.Duration
+		t.batch.buf = make([]*Event, c.BatchSize)
+		t.batch.size = c.BatchSize
+		t.batch.timeout = c.BatchTimeout.Duration
 
 		o.tgts = append(o.tgts, t)
 		t.wg.Add(1)
@@ -140,7 +164,11 @@ func newOutput(cfg *outputCfg) (*output, error) {
 	o.wg.Add(1)
 	go o.dispatch()
 
-	o.Infof("Output started")
+	if cfg.StatsInterval.Duration > 0 {
+		o.wg.Add(1)
+		go o.statsTicker()
+	}
+
 	return o, nil
 }
 
@@ -168,12 +196,12 @@ func (o *output) pushBatch(batch []*Event) {
 
 	for _, e := range batch {
 		if key, err = o.getKey(e); err != nil {
-			o.Warnf("Unable to get key, skipping event: %s", err)
+			o.Warnf("Unable to get key, dropping event: %s", err)
 			continue
 		}
 
 		if tgts = o.getTargets(key); len(tgts) == 0 {
-			o.Debugf("No targets, skipping event")
+			o.Debugf("No targets, dropping event")
 			atomic.AddUint64(&o.stats.droppedNoTargets, 1)
 			continue
 		}
@@ -241,7 +269,8 @@ func (o *output) getTargetsRoundRobin(key string) (tgts []*target) {
 }
 
 func (o *output) getTargetsHash(key string) (tgts []*target) {
-	id := fnv1a.HashString64(key) % uint64(len(o.tgts))
+	//id := fnv1.HashString64(key) % o.tgtCnt
+	id := xxhash.Sum64String(key) % o.tgtCnt
 	tgts = append(tgts, o.tgts[id])
 	return
 }
@@ -250,22 +279,21 @@ func (o *output) getTargetsBroadcast(key string) (tgts []*target) {
 	return o.tgts
 }
 
-func (o *output) logHdr(msg string) string {
-	return o.name + ": " + msg
-}
+func (o *output) statsTicker() {
+	defer o.wg.Done()
+	tick := time.NewTicker(cfg.StatsInterval.Duration)
+	defer tick.Stop()
 
-func (o *output) Debugf(msg string, args ...interface{}) {
-	log.Debugf(o.logHdr(msg), args...)
-}
+	for {
+		select {
+		case <-o.ctx.Done():
+			return
+		case <-tick.C:
+			o.Infof("processed %d droppedNoTargets %d", atomic.LoadUint64(&o.stats.processed), atomic.LoadUint64(&o.stats.droppedNoTargets))
 
-func (o *output) Infof(msg string, args ...interface{}) {
-	log.Infof(o.logHdr(msg), args...)
-}
-
-func (o *output) Warnf(msg string, args ...interface{}) {
-	log.Warnf(o.logHdr(msg), args...)
-}
-
-func (o *output) Errorf(msg string, args ...interface{}) {
-	log.Errorf(o.logHdr(msg), args...)
+			for _, t := range o.tgts {
+				o.Infof("%s: %s", t.host, t.getStats())
+			}
+		}
+	}
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"math/rand"
+	"strconv"
 	"time"
 
 	riemanngo "github.com/riemann/riemann-go-client"
@@ -15,9 +17,10 @@ func main() {
 	}
 
 	events := []riemanngo.Event{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1000; i++ {
 		events = append(events, riemanngo.Event{
 			Service: "hello",
+			Host:    strconv.Itoa(rand.Intn(1000000000000)),
 			Metric:  100,
 			Tags:    []string{"hello"},
 			Attributes: map[string]string{
