@@ -1,13 +1,56 @@
+# List of IP:Port to listen on (TCP) for Riemann protobuf events
 listen = [ "127.0.0.1:1234" ]
+
+# Where to expose stats & metrics
+listenHTTP = "127.0.0.1:9999"
+
+# Input buffer size (number of batches, not events)
 buffer_size = 100000
+
+# How frequently to print stats in the logs
 stats_interval = "5s"
+
+# Read/Write timeout on incoming connections
 timeout = "5s"
 
-[output.carbon1]
+# One or more outputs under 'output' subtree
+# Metrics are copied to all outputs
+[output.output1]
+# Output type, can be 'carbon' or 'riemann'
+# Carbon is a plaintext one-metric-per-line
+# Riemann is a Protobuf based output
 type = "carbon"
-algo = "roundrobin"
-targets = [ "127.0.0.1:1235", "127.0.0.1:1236", "127.0.0.1:1237", "127.0.0.1:1238" ]
-#targets = [ "127.0.0.1:1235" ]
-#buffer_size = 100000
-#batch_timeout = "1s"
-#batch_size = 50
+
+# Algorithm to choose targets
+#
+# Can be one of:
+# - roundrobin: spread metrics over all targets evenly
+# - broadcast: copy metrics to all targets
+# - hash: use a hash of metric name/path to choose a target to get consistent metric -> target mapping
+# - failover: send metrics to the first live target (left to right)
+algo = "hash"
+
+# List of IP:Port targets
+targets = [ "1.1.1.1:1234", "2.2.2.2:1234", "3.3.3.3:1234" ]
+
+# Output metric buffer size *per target* (count of metrics)
+# If the target is down then the metrics are accumulated in this buffer until the target is up again
+# If the buffer is full then new metrics will be discarded
+buffer_size = 2000000
+
+# Count of metrics to send to a target in one iteration
+# For Carbon this is a number of metrics in a single TCP write (larger batch -> fewer system calls)
+# For Riemann this is a number of events sent in a single Protobuf message
+batch_size = 50
+
+# How frequently to flush batches to a target
+batch_timeout = "1s"
+
+# Delay between connection retries when target is down
+reconnect_interval = "1s"
+
+# How long to wait for the connection to be established
+connect_timeout = "1s"
+
+# Read/Write timeout on outgoing connections
+timeout = "5s"

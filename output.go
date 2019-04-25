@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,11 +133,12 @@ func newOutput(c *outputCfg) (*output, error) {
 
 	for _, h := range c.Targets {
 		t := &target{
-			host:        h,
-			typ:         typ,
-			connTimeout: c.ConnectTimeout.Duration,
-			timeout:     c.Timeout.Duration,
-			o:           o,
+			host:              h,
+			typ:               typ,
+			reconnectInterval: c.ReconnectInterval.Duration,
+			connTimeout:       c.ConnectTimeout.Duration,
+			timeout:           c.Timeout.Duration,
+			o:                 o,
 
 			chanDispatch: make(chan struct{}),
 			chanIn:       make(chan *Event, cfg.BufferSize),
@@ -195,14 +197,17 @@ func (o *output) pushBatch(batch []*Event) {
 	)
 
 	for _, e := range batch {
-		if key, err = o.getKey(e); err != nil {
-			o.Warnf("Unable to get key, dropping event: %s", err)
-			continue
+		if o.algo == outputAlgoHash {
+			if key, err = o.getKey(e); err != nil {
+				o.Warnf("Unable to get key, dropping event: %s", err)
+				continue
+			}
 		}
 
 		if tgts = o.getTargets(key); len(tgts) == 0 {
 			o.Debugf("No targets, dropping event")
 			atomic.AddUint64(&o.stats.droppedNoTargets, 1)
+			promOutNoTarget.WithLabelValues(o.name).Add(1)
 			continue
 		}
 
@@ -210,8 +215,10 @@ func (o *output) pushBatch(batch []*Event) {
 			select {
 			case t.chanIn <- e:
 				atomic.AddUint64(&o.stats.processed, 1)
+				promOutProcessed.WithLabelValues(o.name).Add(1)
 			default:
 				atomic.AddUint64(&t.stats.dropped, 1)
+				promTgtDropped.WithLabelValues(o.name, t.host).Add(1)
 			}
 		}
 	}
@@ -269,7 +276,6 @@ func (o *output) getTargetsRoundRobin(key string) (tgts []*target) {
 }
 
 func (o *output) getTargetsHash(key string) (tgts []*target) {
-	//id := fnv1.HashString64(key) % o.tgtCnt
 	id := xxhash.Sum64String(key) % o.tgtCnt
 	tgts = append(tgts, o.tgts[id])
 	return
@@ -289,11 +295,22 @@ func (o *output) statsTicker() {
 		case <-o.ctx.Done():
 			return
 		case <-tick.C:
-			o.Infof("processed %d droppedNoTargets %d", atomic.LoadUint64(&o.stats.processed), atomic.LoadUint64(&o.stats.droppedNoTargets))
-
-			for _, t := range o.tgts {
-				o.Infof("%s: %s", t.host, t.getStats())
+			for _, r := range strings.Split(strings.TrimSpace(o.getStats()), "\n") {
+				o.Infof(r)
 			}
 		}
 	}
+}
+
+func (o *output) getStats() (s string) {
+	s = fmt.Sprintf("processed %d droppedNoTargets %d\n",
+		atomic.LoadUint64(&o.stats.processed),
+		atomic.LoadUint64(&o.stats.droppedNoTargets),
+	)
+
+	for _, t := range o.tgts {
+		s += fmt.Sprintf("%s: %s\n", t.host, t.getStats())
+	}
+
+	return
 }

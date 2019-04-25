@@ -1,17 +1,6 @@
 syntax = "proto3";
 package main;
 
-message State {
-  int64 time = 1;
-  string state = 2;
-  string service = 3;
-  string host = 4;
-  string description = 5;
-  bool once = 6;
-  repeated string tags = 7;
-  float ttl = 8;
-}
-
 message Event {
   int64 time = 1;
   string state = 2;
@@ -34,7 +23,6 @@ message Query {
 message Msg {
   bool ok = 2;
   string error = 3;
-  repeated State states = 4;
   Query query = 5;
   repeated Event events = 6;
 }

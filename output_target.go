@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	fmt "fmt"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	pb "github.com/golang/protobuf/proto"
 )
 
 type target struct {
@@ -17,8 +20,9 @@ type target struct {
 
 	conn net.Conn
 
-	connTimeout time.Duration
-	timeout     time.Duration
+	reconnectInterval time.Duration
+	connTimeout       time.Duration
+	timeout           time.Duration
 
 	batch struct {
 		buf     []*Event
@@ -31,9 +35,10 @@ type target struct {
 	alive bool
 
 	stats struct {
-		processed  uint64
-		connFailed uint64
-		dropped    uint64
+		sent        uint64
+		connFailed  uint64
+		dropped     uint64
+		flushFailed uint64
 	}
 
 	chanOpen     chan struct{}
@@ -76,12 +81,13 @@ func (t *target) run() {
 			c, err := t.connect()
 			if err != nil {
 				atomic.AddUint64(&t.stats.connFailed, 1)
-				t.Errorf("Connection failed, will retry in 5 sec: %s", err)
+				promTgtConnFailed.WithLabelValues(t.o.name, t.host).Add(1)
+				t.Errorf("Connection failed, will retry in %d sec: %s", t.reconnectInterval, err)
 
 				select {
 				case <-t.ctx.Done():
 					return
-				case <-time.After(5 * time.Second):
+				case <-time.After(t.reconnectInterval):
 				}
 
 				continue
@@ -261,6 +267,50 @@ func (t *target) writeBatchCarbon(batch []*Event) (err error) {
 }
 
 func (t *target) writeBatchRiemann(batch []*Event) (err error) {
+	msg := &Msg{
+		Events: batch,
+	}
+
+	buf, err := pb.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("Unable to marshal Protobuf: %s", err)
+	}
+
+	if err = binary.Write(t.conn, binary.BigEndian, uint32(len(buf))); err != nil {
+		return fmt.Errorf("Unable to write Protobuf length: %s", err)
+	}
+
+	if _, err = t.conn.Write(buf); err != nil {
+		return fmt.Errorf("Unable to write Protobuf body: %s", err)
+	}
+	t.Debugf("Protobuf message sent")
+
+	var hdr uint32
+	if err = binary.Read(t.conn, binary.BigEndian, &hdr); err != nil {
+		if err == io.EOF {
+			return err
+		}
+
+		return fmt.Errorf("Unable to read Protobuf reply length: %s", err)
+	}
+	t.Debugf("Protobuf reply size read (%d bytes)", hdr)
+
+	buf = make([]byte, hdr)
+	if err = readPacket(t.conn, buf); err != nil {
+		return fmt.Errorf("Unable to read Protobuf reply body: %s", err)
+	}
+	t.Debugf("Protobuf reply body read")
+
+	msg.Reset()
+	if err = pb.Unmarshal(buf, msg); err != nil {
+		return fmt.Errorf("Unable to unmarshal Protobuf reply: %s", err)
+	}
+
+	if !msg.Ok {
+		return fmt.Errorf("Non-OK reply from Riemann")
+	}
+
+	t.Debugf("Protobuf reply body unmarshaled and OK")
 	return
 }
 
@@ -277,7 +327,8 @@ func (t *target) push(e *Event) {
 
 	t.batch.buf[t.batch.count] = e
 	t.batch.count++
-	atomic.AddUint64(&t.stats.processed, 1)
+	atomic.AddUint64(&t.stats.sent, 1)
+	promTgtSent.WithLabelValues(t.o.name, t.host).Add(1)
 
 	if t.batch.count >= t.batch.size {
 		t.Debugf("Buffer is full (%d/%d), flushing", t.batch.count, t.batch.size)
@@ -349,6 +400,8 @@ func (t *target) flush() (err error) {
 
 	if err = t.writeBatch(t.batch.buf[:t.batch.count]); err != nil {
 		if !isErrClosedConn(err) {
+			atomic.AddUint64(&t.stats.flushFailed, 1)
+			promTgtFlushFailed.WithLabelValues(t.o.name, t.host).Add(1)
 			t.Errorf("Unable to flush batch: %s", err)
 			t.disconnect()
 		}
@@ -357,14 +410,19 @@ func (t *target) flush() (err error) {
 	}
 
 	t.batch.count = 0
-	t.Debugf("Batch flushed in %.2f sec", time.Since(ts).Seconds())
+
+	dur := time.Since(ts).Seconds()
+	t.Debugf("Batch flushed in %.2f sec", dur)
+	promTgtFlushDuration.WithLabelValues(t.o.name, t.host).Observe(dur)
+
 	return
 }
 
 func (t *target) getStats() string {
-	return fmt.Sprintf("processed %d dropped %d connFailed %d",
-		atomic.LoadUint64(&t.stats.processed),
+	return fmt.Sprintf("sent %d dropped %d connFailed %d flushFailed %d",
+		atomic.LoadUint64(&t.stats.sent),
 		atomic.LoadUint64(&t.stats.dropped),
 		atomic.LoadUint64(&t.stats.connFailed),
+		atomic.LoadUint64(&t.stats.flushFailed),
 	)
 }

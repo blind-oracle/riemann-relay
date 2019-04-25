@@ -17,7 +17,7 @@ func main() {
 	}
 
 	events := []riemanngo.Event{}
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 50; i++ {
 		events = append(events, riemanngo.Event{
 			Service: "hello",
 			Host:    strconv.Itoa(rand.Intn(1000000000000)),
@@ -29,7 +29,7 @@ func main() {
 		})
 	}
 
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100000; i++ {
 		r, err := riemanngo.SendEvents(c, &events)
 		if err != nil {
 			log.Fatalf("Unable to send events: %s", err)

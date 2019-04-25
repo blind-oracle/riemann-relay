@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -26,4 +27,16 @@ func getPrefix(e *Event) (string, error) {
 
 func isErrClosedConn(err error) bool {
 	return strings.Contains(err.Error(), "use of closed network connection")
+}
+
+func readPacket(r io.Reader, p []byte) error {
+	for len(p) > 0 {
+		n, err := r.Read(p)
+		p = p[n:]
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

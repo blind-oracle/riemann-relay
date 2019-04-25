@@ -18,19 +18,21 @@ func (d *duration) UnmarshalText(text []byte) error {
 }
 
 type outputCfg struct {
-	Name           string
-	Type           string
-	Algo           string
-	Targets        []string
-	ConnectTimeout duration `toml:"connect_timeout"`
-	Timeout        duration
-	BufferSize     int      `toml:"buffer_size"`
-	BatchSize      int      `toml:"batch_size"`
-	BatchTimeout   duration `toml:"batch_timeout"`
+	Name              string
+	Type              string
+	Algo              string
+	Targets           []string
+	ReconnectInterval duration `toml:"reconnect_interval"`
+	ConnectTimeout    duration `toml:"connect_timeout"`
+	Timeout           duration
+	BufferSize        int      `toml:"buffer_size"`
+	BatchSize         int      `toml:"batch_size"`
+	BatchTimeout      duration `toml:"batch_timeout"`
 }
 
 type config struct {
 	Listen        []string
+	ListenHTTP    string
 	Timeout       duration
 	StatsInterval duration              `toml:"stats_interval"`
 	BufferSize    int                   `toml:"buffer_size"`
@@ -68,6 +70,10 @@ func configLoad(file string) error {
 
 		if o.Timeout.Duration == 0 {
 			o.Timeout.Duration = 5 * time.Second
+		}
+
+		if o.ReconnectInterval.Duration == 0 {
+			o.ReconnectInterval.Duration = 1 * time.Second
 		}
 
 		if o.BufferSize == 0 {

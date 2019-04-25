@@ -6,50 +6,49 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"sync/atomic"
 	"syscall"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	stats struct {
-		processed uint64
-	}
+	lis     *listener
+	outputs []*output
 )
 
 func main() {
 	var (
-		outputs []*output
-		wg      sync.WaitGroup
+		wg  sync.WaitGroup
+		err error
 	)
 
+	l := &logger{"Main"}
 	chanClose, chanDrain := make(chan struct{}), make(chan struct{})
 
-	var err error
 	configFile := flag.String("config", "/etc/riemann-relay.toml", "Path to a config file")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
 	if *debug {
 		log.SetLevel(log.DebugLevel)
+		l.Infof("Debugging enabled")
 	}
 
 	if err = configLoad(*configFile); err != nil {
-		log.Fatalf("Unable to load config file: %s", err)
+		l.Fatalf("Unable to load config file: %s", err)
 	}
+	l.Infof("Configuration loaded")
 
 	chanInput := make(chan []*Event, cfg.BufferSize)
-	lis, err := newListener(cfg.Listen, cfg.Timeout.Duration, chanInput)
+	lis, err = newListener(cfg.Listen, cfg.Timeout.Duration, chanInput)
 	if err != nil {
-		log.Fatalf("Unable to set up listener: %s", err)
+		l.Fatalf("Unable to set up listener: %s", err)
 	}
 
 	for _, ocfg := range cfg.Outputs {
 		o, err := newOutput(ocfg)
 		if err != nil {
-			log.Fatalf("Unable to init output '%s': %s", ocfg.Name, err)
+			l.Fatalf("Unable to init output '%s': %s", ocfg.Name, err)
 		}
 
 		outputs = append(outputs, o)
@@ -62,38 +61,17 @@ func main() {
 		for sig := range sigchannel {
 			switch sig {
 			case os.Interrupt, syscall.SIGTERM:
-				log.Warnf("Got SIGTERM/Ctrl+C, shutting down")
+				l.Warnf("Got SIGTERM/Ctrl+C, shutting down")
 				close(chanClose)
 				return
 			}
 		}
 	}()
 
-	wg.Add(1)
-	if cfg.StatsInterval.Duration > 0 {
-		go func() {
-			defer wg.Done()
-			t := time.NewTicker(cfg.StatsInterval.Duration)
-			defer t.Stop()
-
-			for {
-				select {
-				case <-chanClose:
-					return
-
-				case <-t.C:
-					log.Infof("Events processed: %d", atomic.LoadUint64(&stats.processed))
-				}
-			}
-		}()
-	}
-
-	pushToOutputs := func(batch []*Event) {
+	pushBatch := func(batch []*Event) {
 		for _, o := range outputs {
 			o.chanIn <- batch
 		}
-
-		atomic.AddUint64(&stats.processed, uint64(len(batch)))
 	}
 
 	wg.Add(1)
@@ -107,17 +85,17 @@ func main() {
 		for {
 			select {
 			case <-chanDrain:
-				log.Info("Draining input buffer...")
+				l.Infof("Draining input buffer...")
 
 				c := 0
 				for {
 					batch, ok = <-chanInput
 					if !ok {
-						log.Infof("Input buffer drained (%d batches)", c)
+						l.Infof("Input buffer drained (%d batches)", c)
 						return
 					}
 
-					pushToOutputs(batch)
+					pushBatch(batch)
 					c++
 				}
 
@@ -126,10 +104,13 @@ func main() {
 					continue
 				}
 
-				pushToOutputs(batch)
+				pushBatch(batch)
 			}
 		}
 	}()
+
+	l.Infof("HTTP listening to %s", cfg.ListenHTTP)
+	go initHTTP()
 
 	<-chanClose
 	lis.Close()
@@ -141,4 +122,5 @@ func main() {
 		o.Close()
 	}
 
+	l.Infof("Shutdown complete")
 }

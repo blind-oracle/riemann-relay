@@ -21,3 +21,7 @@ func (l *logger) Warnf(msg string, args ...interface{}) {
 func (l *logger) Errorf(msg string, args ...interface{}) {
 	log.Errorf(l.pfx+": "+msg, args...)
 }
+
+func (l *logger) Fatalf(msg string, args ...interface{}) {
+	log.Fatalf(l.pfx+": "+msg, args...)
+}

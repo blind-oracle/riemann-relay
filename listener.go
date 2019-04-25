@@ -23,8 +23,9 @@ type listener struct {
 	connWg   sync.WaitGroup
 
 	stats struct {
-		received uint64
-		dropped  uint64
+		receivedBatches uint64
+		receivedEvents  uint64
+		dropped         uint64
 	}
 
 	conns map[string]*net.TCPConn
@@ -79,9 +80,17 @@ func (l *listener) statsTicker() {
 		case <-l.shutdown:
 			return
 		case <-t.C:
-			l.Infof("dropped %d", atomic.LoadUint64(&l.stats.dropped))
+			l.Infof(l.getStats())
 		}
 	}
+}
+
+func (l *listener) getStats() string {
+	return fmt.Sprintf("receivedBatches %d receivedEvents %d dropped %d",
+		atomic.LoadUint64(&l.stats.receivedBatches),
+		atomic.LoadUint64(&l.stats.receivedEvents),
+		atomic.LoadUint64(&l.stats.dropped),
+	)
 }
 
 func (l *listener) accept(lis *net.TCPListener) {
@@ -121,7 +130,7 @@ func (l *listener) handleConnection(c net.Conn) {
 
 	defer func() {
 		c.Close()
-		l.Infof("%s: Connection from closed", peer)
+		l.Infof("%s: Connection closed", peer)
 
 		// Remove connection from a map
 		l.Lock()
@@ -172,7 +181,8 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 
 	select {
 	case l.chanOut <- msg.Events:
-		atomic.AddUint64(&l.stats.received, uint64(len(msg.Events)))
+		atomic.AddUint64(&l.stats.receivedBatches, 1)
+		atomic.AddUint64(&l.stats.receivedEvents, uint64(len(msg.Events)))
 	case <-l.shutdown:
 		return
 	default:
@@ -217,16 +227,4 @@ func (l *listener) Close() {
 	l.connWg.Wait()
 
 	l.Infof("Closed")
-}
-
-func readPacket(r io.Reader, p []byte) error {
-	for len(p) > 0 {
-		n, err := r.Read(p)
-		p = p[n:]
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
