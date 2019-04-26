@@ -112,7 +112,12 @@ func (t *target) run() {
 			case <-t.chanClose:
 				t.connMtx.Lock()
 				t.Errorf("Connection broken")
-				time.Sleep(5 * time.Second)
+
+				select {
+				case <-t.ctx.Done():
+					return
+				case <-time.After(t.reconnectInterval):
+				}
 			}
 		}
 	}
@@ -211,7 +216,7 @@ func (t *target) dispatch() {
 		select {
 		case <-t.chanDispatch:
 			if !t.isAlive() {
-				t.Infof("Connection is dead, will not flush buffers")
+				t.Infof("Connection is down, will not flush buffers")
 				return
 			}
 
@@ -232,7 +237,7 @@ func (t *target) dispatch() {
 					c++
 
 				case <-dl:
-					t.Warnf("Unable to flush buffers in 30 sec (%d events flushed), giving up", c)
+					t.Errorf("Unable to flush buffers in 30 sec (%d events flushed so far), giving up", c)
 					return
 				}
 			}
@@ -253,6 +258,7 @@ func (t *target) writeBatchCarbon(batch []*Event) (err error) {
 		m   []byte
 	)
 
+	t.Debugf("Preparing a batch of Carbon metrics (%d)", len(batch))
 	for _, e := range batch {
 		if m, err = eventToCarbon(e); err != nil {
 			return fmt.Errorf("Unable to convert event to Carbon, skipping: %s", err)
@@ -262,6 +268,7 @@ func (t *target) writeBatchCarbon(batch []*Event) (err error) {
 		buf.WriteByte('\n')
 	}
 
+	t.Debugf("Sending batch")
 	_, err = t.conn.Write(buf.Bytes())
 	return
 }
@@ -283,7 +290,7 @@ func (t *target) writeBatchRiemann(batch []*Event) (err error) {
 	if _, err = t.conn.Write(buf); err != nil {
 		return fmt.Errorf("Unable to write Protobuf body: %s", err)
 	}
-	t.Debugf("Protobuf message sent")
+	t.Debugf("Protobuf message sent (%d bytes)", len(buf))
 
 	var hdr uint32
 	if err = binary.Read(t.conn, binary.BigEndian, &hdr); err != nil {
@@ -318,7 +325,7 @@ func (t *target) push(e *Event) {
 	t.batch.Lock()
 	defer t.batch.Unlock()
 
-	// Fall out if chan is already closed
+	// Fall out if we're shutting down
 	select {
 	case <-t.chanDispatch:
 		return
@@ -331,7 +338,7 @@ func (t *target) push(e *Event) {
 	promTgtSent.WithLabelValues(t.o.name, t.host).Add(1)
 
 	if t.batch.count >= t.batch.size {
-		t.Debugf("Buffer is full (%d/%d), flushing", t.batch.count, t.batch.size)
+		t.Debugf("Batch is full (%d/%d), flushing", t.batch.count, t.batch.size)
 
 	loop:
 		for {
@@ -352,7 +359,7 @@ func (t *target) push(e *Event) {
 		}
 	}
 
-	t.Debugf("Buffer is now %d/%d", t.batch.count, t.batch.size)
+	t.Debugf("Batch is now %d/%d", t.batch.count, t.batch.size)
 }
 
 func (t *target) periodicFlush() {
@@ -386,6 +393,7 @@ func (t *target) tryFlush() {
 		return
 	}
 
+	t.Debugf("Time to flush the batch!")
 	t.flush()
 	return
 }

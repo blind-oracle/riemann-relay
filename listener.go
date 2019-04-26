@@ -101,7 +101,7 @@ func (l *listener) accept(lis *net.TCPListener) {
 		if err != nil {
 			select {
 			case <-l.shutdown:
-				l.Infof("Accepter '%s': exiting", lis.Addr())
+				l.Infof("%s: Accepter closing", lis.Addr())
 				return
 			default:
 				l.Errorf("%s: Error accepting : %s", lis.Addr(), err)
