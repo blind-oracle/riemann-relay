@@ -1,10 +1,11 @@
 # List of IP:Port to listen on (TCP) for Riemann protobuf events
 listen = [ "127.0.0.1:1234" ]
 
-# Where to expose stats & metrics
+# Where to expose stats & Prometheus metrics
 listenHTTP = "127.0.0.1:9999"
 
 # Input buffer size (number of batches, not events)
+# Currently has no sigificant effect on anything
 buffer_size = 100000
 
 # How frequently to print stats in the logs
@@ -14,7 +15,8 @@ stats_interval = "5s"
 timeout = "5s"
 
 # One or more outputs under 'output' subtree
-# Metrics are copied to all outputs
+# Received events are copied to all outputs
+
 [output.output1]
 # Output type, can be 'carbon' or 'riemann'
 # Carbon is a plaintext one-metric-per-line
@@ -26,27 +28,74 @@ type = "carbon"
 # Can be one of:
 # - roundrobin: spread metrics over all targets evenly
 # - broadcast: copy metrics to all targets
-# - hash: use a hash of metric name/path to choose a target to get consistent metric -> target mapping
-# - failover: send metrics to the first live target (left to right)
+# - hash: use xxhash64 to choose a target to get consistent target mapping
+#   See parameter 'hash_fields' below for hashing key
+# - failover: send metrics to the first live target (left to right in the target list, see below)
 algo = "hash"
+
+# List of Riemann event fields to use as a hashing key, required if the 'algo' is 'hash'
+# These are evaluated left-to-right.
+#
+# Possible values:
+# - state
+# - service
+# - host
+# - description
+#
+# These directly map to corresponding Event fields in Protobuf.
+#
+# Additionally you can use:
+# - tag:name
+#   If there's a tag 'name' in the Event then 'name' will be used as value
+# - attr:name
+#   If there's an attribute 'name' in the Event then it's value will be used
+#
+# If there's no tag/attribute found by this name then it's ignored
+hash_fields = [ "attr:foo", "host", "service", "tag:bar" ]
+
+# List of Riemann event fields to use to form a Carbon metric name, required if output type is 'carbon'
+# The values of the fields are joined together with a '.' separator per Carbon specs
+#
+# For syntax see 'hash_fields' parameter up there.
+carbon_fields = [ "attr:prefix", "host", "service" ]
+
+# Which Riemann value field to use when forming a Carbon metric.
+# Riemann Protobuf has 3 value fields (int, float and double)
+#
+# Possible values:
+# - int
+# - float
+# - double
+# - any
+# 
+# If you specify 'any' then all fields are checked (int -> float -> double)
+# and first non-zero is used as a value. If all of them are zero then zero is used.
+#
+# Value is converted to float64
+carbon_value = "any"
 
 # List of IP:Port targets
 targets = [ "1.1.1.1:1234", "2.2.2.2:1234", "3.3.3.3:1234" ]
 
-# Output metric buffer size *per target* (count of metrics)
+# Output metric buffer size *per target* (count of events)
+#
 # If the target is down then the metrics are accumulated in this buffer until the target is up again
 # If the buffer is full then new metrics will be discarded
 buffer_size = 2000000
 
-# Count of metrics to send to a target in one iteration
+# Count of metrics/events to send in one iteration
+#
 # For Carbon this is a number of metrics in a single TCP write (larger batch -> fewer system calls)
 # For Riemann this is a number of events sent in a single Protobuf message
+# 
+# If the amount of pending metrics is equal to this value then they're flushed immediately
+# If it's less then it will be flushed every 'batch_timeout'
 batch_size = 50
 
-# How frequently to flush batches to a target
+# How frequently to flush batches to a target if it's less than 'batch_size'
 batch_timeout = "1s"
 
-# Delay between connection retries when target is down
+# Delay between connection retries when the target is down
 reconnect_interval = "1s"
 
 # How long to wait for the connection to be established

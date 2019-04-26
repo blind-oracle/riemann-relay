@@ -7,6 +7,7 @@ import (
 	fmt "fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,10 +42,10 @@ type target struct {
 		flushFailed uint64
 	}
 
-	chanOpen     chan struct{}
-	chanClose    chan struct{}
-	chanDispatch chan struct{}
-	chanIn       chan *Event
+	chanOpen          chan struct{}
+	chanClose         chan struct{}
+	chanDispatchClose chan struct{}
+	chanIn            chan *Event
 
 	writeBatch writeBatchFunc
 
@@ -59,6 +60,39 @@ type target struct {
 	connMtx sync.RWMutex
 	sync.RWMutex
 	*logger
+}
+
+func newOutputTgt(h string, c *outputCfg, o *output) *target {
+	t := &target{
+		host:              h,
+		typ:               o.typ,
+		reconnectInterval: c.ReconnectInterval.Duration,
+		connTimeout:       c.ConnectTimeout.Duration,
+		timeout:           c.Timeout.Duration,
+		o:                 o,
+
+		chanDispatchClose: make(chan struct{}),
+		chanIn:            make(chan *Event, cfg.BufferSize),
+		logger:            &logger{fmt.Sprintf("%s: %s", c.Name, h)},
+	}
+
+	t.ctx, t.ctxCancel = context.WithCancel(context.Background())
+
+	switch o.typ {
+	case outputTypeCarbon:
+		t.writeBatch = t.writeBatchCarbon
+	case outputTypeRiemann:
+		t.writeBatch = t.writeBatchRiemann
+	}
+
+	t.batch.buf = make([]*Event, c.BatchSize)
+	t.batch.size = c.BatchSize
+	t.batch.timeout = c.BatchTimeout.Duration
+
+	t.wg.Add(1)
+	go t.run()
+
+	return t
 }
 
 func (t *target) run() {
@@ -82,7 +116,7 @@ func (t *target) run() {
 			if err != nil {
 				atomic.AddUint64(&t.stats.connFailed, 1)
 				promTgtConnFailed.WithLabelValues(t.o.name, t.host).Add(1)
-				t.Errorf("Connection failed, will retry in %d sec: %s", t.reconnectInterval, err)
+				t.Errorf("Connection failed, will retry in %.1f sec: %s", t.reconnectInterval.Seconds(), err)
 
 				select {
 				case <-t.ctx.Done():
@@ -176,8 +210,9 @@ func (t *target) disconnect() {
 func (t *target) Close() {
 	t.Infof("Waiting for the dispatcher to flush...")
 	close(t.chanIn)
-	close(t.chanDispatch)
+	close(t.chanDispatchClose)
 
+	// TODO potential race with run()
 	if !t.isAlive() {
 		t.connMtx.Unlock()
 	}
@@ -214,7 +249,7 @@ func (t *target) dispatch() {
 
 	for {
 		select {
-		case <-t.chanDispatch:
+		case <-t.chanDispatchClose:
 			if !t.isAlive() {
 				t.Infof("Connection is down, will not flush buffers")
 				return
@@ -229,7 +264,7 @@ func (t *target) dispatch() {
 				select {
 				case e, ok = <-t.chanIn:
 					if !ok {
-						t.Infof("%d events flushed", c)
+						t.Infof("Buffer flushed (%d events)", c)
 						return
 					}
 
@@ -253,24 +288,31 @@ func (t *target) dispatch() {
 }
 
 func (t *target) writeBatchCarbon(batch []*Event) (err error) {
-	var (
-		buf bytes.Buffer
-		m   []byte
-	)
+	var buf bytes.Buffer
 
-	t.Debugf("Preparing a batch of Carbon metrics (%d)", len(batch))
+	t.Debugf("Preparing a batch of %d Carbon metrics", len(batch))
 	for _, e := range batch {
-		if m, err = eventToCarbon(e); err != nil {
-			return fmt.Errorf("Unable to convert event to Carbon, skipping: %s", err)
-		}
-
-		buf.Write(m)
+		buf.Write(t.eventToCarbon(e))
 		buf.WriteByte('\n')
 	}
 
 	t.Debugf("Sending batch")
 	_, err = t.conn.Write(buf.Bytes())
 	return
+}
+
+func (t *target) eventToCarbon(e *Event) []byte {
+	var b bytes.Buffer
+	b.Write(eventCompileFields(e, t.o.carbonFields, "."))
+	b.WriteByte(' ')
+	val := strconv.FormatFloat(eventGetValue(e, t.o.carbonValue), 'f', -1, 64)
+	b.WriteString(val)
+	b.WriteByte(' ')
+	b.WriteString(strconv.FormatInt(e.Time, 10))
+
+	//return []byte(fmt.Sprintf("%s.%s.%s %f %d", pfx, e.Host, e.Service, e.MetricF, e.Time)), nil
+	t.Debugf("Carbon metric: %s", b.String())
+	return b.Bytes()
 }
 
 func (t *target) writeBatchRiemann(batch []*Event) (err error) {
@@ -327,7 +369,7 @@ func (t *target) push(e *Event) {
 
 	// Fall out if we're shutting down
 	select {
-	case <-t.chanDispatch:
+	case <-t.chanDispatchClose:
 		return
 	default:
 	}
@@ -343,7 +385,7 @@ func (t *target) push(e *Event) {
 	loop:
 		for {
 			select {
-			case <-t.chanDispatch:
+			case <-t.chanDispatchClose:
 				return
 			default:
 				if err := t.flush(); err == nil {
@@ -351,7 +393,7 @@ func (t *target) push(e *Event) {
 				}
 
 				select {
-				case <-t.chanDispatch:
+				case <-t.chanDispatchClose:
 					return
 				case <-time.After(1 * time.Second):
 				}
@@ -400,6 +442,7 @@ func (t *target) tryFlush() {
 
 // Assumes locked batch
 func (t *target) flush() (err error) {
+	t.Debugf("Waiting for the connection mutex")
 	t.connMtx.Lock()
 	defer t.connMtx.Unlock()
 

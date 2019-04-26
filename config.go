@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -18,9 +19,14 @@ func (d *duration) UnmarshalText(text []byte) error {
 }
 
 type outputCfg struct {
-	Name              string
-	Type              string
-	Algo              string
+	Name string
+	Type string
+
+	Algo         string
+	HashFields   []string `toml:"hash_fields"`
+	CarbonFields []string `toml:"carbon_fields"`
+	CarbonValue  string   `toml:"carbon_value"`
+
 	Targets           []string
 	ReconnectInterval duration `toml:"reconnect_interval"`
 	ConnectTimeout    duration `toml:"connect_timeout"`
@@ -86,6 +92,19 @@ func configLoad(file string) error {
 
 		if o.BatchTimeout.Duration == 0 {
 			o.BatchTimeout.Duration = 1 * time.Second
+		}
+
+		tgtMap := map[string]bool{}
+		for _, t := range o.Targets {
+			if tgtMap[t] {
+				return fmt.Errorf("Output '%s': Target '%s' is specified more than once", n, t)
+			}
+
+			tgtMap[t] = true
+
+			if _, err := net.ResolveTCPAddr("tcp", t); err != nil {
+				return fmt.Errorf("Output %s: %s: Bad TCP address specified: %s", n, t, err)
+			}
 		}
 	}
 

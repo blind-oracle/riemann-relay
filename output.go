@@ -11,62 +11,15 @@ import (
 	"github.com/cespare/xxhash"
 )
 
-type outputAlgo int
-type outputType int
-type writeBatchFunc func([]*Event) error
-
-func (a outputAlgo) String() string {
-	return outputAlgoMapRev[a]
-}
-
-func (t outputType) String() string {
-	return outputTypeMapRev[t]
-}
-
-const (
-	outputTypeCarbon outputType = iota
-	outputTypeRiemann
-)
-
-const (
-	outputAlgoHash outputAlgo = iota
-	outputAlgoFailover
-	outputAlgoRoundRobin
-	outputAlgoBroadcast
-)
-
-var (
-	outputTypeMap = map[string]outputType{
-		"carbon":  outputTypeCarbon,
-		"riemann": outputTypeRiemann,
-	}
-
-	outputAlgoMap = map[string]outputAlgo{
-		"hash":       outputAlgoHash,
-		"failover":   outputAlgoFailover,
-		"roundrobin": outputAlgoRoundRobin,
-		"broadcast":  outputAlgoBroadcast,
-	}
-
-	outputTypeMapRev = map[outputType]string{}
-	outputAlgoMapRev = map[outputAlgo]string{}
-)
-
-func init() {
-	for k, v := range outputTypeMap {
-		outputTypeMapRev[v] = k
-	}
-
-	for k, v := range outputAlgoMap {
-		outputAlgoMapRev[v] = k
-	}
-}
-
 type output struct {
 	name string
 
 	typ  outputType
 	algo outputAlgo
+
+	hashFields   []riemannFieldName
+	carbonFields []riemannFieldName
+	carbonValue  riemannValue
 
 	tgts    []*target
 	tgtCnt  uint64
@@ -77,8 +30,7 @@ type output struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
-	getTargets func(string) []*target
-	getKey     func(*Event) (string, error)
+	getTargets func([]byte) []*target
 
 	stats struct {
 		processed        uint64
@@ -89,7 +41,7 @@ type output struct {
 	*logger
 }
 
-func newOutput(c *outputCfg) (*output, error) {
+func newOutput(c *outputCfg) (o *output, err error) {
 	typ, ok := outputTypeMap[c.Type]
 	if !ok {
 		return nil, fmt.Errorf("Unknown output type '%s'", c.Type)
@@ -100,16 +52,20 @@ func newOutput(c *outputCfg) (*output, error) {
 		return nil, fmt.Errorf("Unknown algorithm '%s'", c.Algo)
 	}
 
-	o := &output{
-		name:   c.Name,
-		typ:    typ,
-		algo:   algo,
-		tgtCnt: uint64(len(c.Targets)),
-		chanIn: make(chan []*Event),
-		logger: &logger{c.Name},
+	cbv, ok := riemannValueMap[c.CarbonValue]
+	if !ok {
+		return nil, fmt.Errorf("Unknown Carbon value '%s'", c.CarbonValue)
 	}
 
-	o.Infof("Starting output (type '%s', algo '%s')", typ, algo)
+	o = &output{
+		name:        c.Name,
+		typ:         typ,
+		algo:        algo,
+		carbonValue: cbv,
+		tgtCnt:      uint64(len(c.Targets)),
+		chanIn:      make(chan []*Event),
+		logger:      &logger{c.Name},
+	}
 
 	switch algo {
 	case outputAlgoFailover:
@@ -122,45 +78,31 @@ func newOutput(c *outputCfg) (*output, error) {
 		o.getTargets = o.getTargetsBroadcast
 	}
 
-	switch typ {
-	case outputTypeCarbon:
-		o.getKey = o.getKeyCarbon
-	case outputTypeRiemann:
-		o.getKey = o.getKeyRiemann
+	if algo == outputAlgoHash {
+		if o.hashFields, err = parseRiemannFields(c.HashFields); err != nil {
+			return
+		}
+
+		if len(o.hashFields) == 0 {
+			return nil, fmt.Errorf("You need to specify hash_fields")
+		}
 	}
 
+	if typ == outputTypeCarbon {
+		if o.carbonFields, err = parseRiemannFields(c.CarbonFields); err != nil {
+			return
+		}
+
+		if len(o.carbonFields) == 0 {
+			return nil, fmt.Errorf("You need to specify carbon_fields for output type 'carbon'")
+		}
+	}
+
+	o.Infof("Starting output (type '%s', algo '%s', hash fields: %v, carbon fields: %v)", typ, algo, o.hashFields, o.carbonFields)
 	o.ctx, o.ctxCancel = context.WithCancel(context.Background())
 
 	for _, h := range c.Targets {
-		t := &target{
-			host:              h,
-			typ:               typ,
-			reconnectInterval: c.ReconnectInterval.Duration,
-			connTimeout:       c.ConnectTimeout.Duration,
-			timeout:           c.Timeout.Duration,
-			o:                 o,
-
-			chanDispatch: make(chan struct{}),
-			chanIn:       make(chan *Event, cfg.BufferSize),
-			logger:       &logger{fmt.Sprintf("%s: %s", c.Name, h)},
-		}
-
-		t.ctx, t.ctxCancel = context.WithCancel(context.Background())
-
-		switch typ {
-		case outputTypeCarbon:
-			t.writeBatch = t.writeBatchCarbon
-		case outputTypeRiemann:
-			t.writeBatch = t.writeBatchRiemann
-		}
-
-		t.batch.buf = make([]*Event, c.BatchSize)
-		t.batch.size = c.BatchSize
-		t.batch.timeout = c.BatchTimeout.Duration
-
-		o.tgts = append(o.tgts, t)
-		t.wg.Add(1)
-		go t.run()
+		o.tgts = append(o.tgts, newOutputTgt(h, c, o))
 	}
 
 	o.wg.Add(1)
@@ -191,19 +133,17 @@ func (o *output) dispatch() {
 
 func (o *output) pushBatch(batch []*Event) {
 	var (
-		key  string
-		err  error
+		key  []byte
 		tgts []*target
 	)
 
 	for _, e := range batch {
 		if o.algo == outputAlgoHash {
-			if key, err = o.getKey(e); err != nil {
-				o.Warnf("Unable to get key, dropping event: %s", err)
-				continue
-			}
+			key = o.getKey(e)
+			o.Debugf("Hash key: %s", key)
 		}
 
+		// Compute a list of targets to send
 		if tgts = o.getTargets(key); len(tgts) == 0 {
 			o.Debugf("No targets, dropping event")
 			atomic.AddUint64(&o.stats.droppedNoTargets, 1)
@@ -211,6 +151,7 @@ func (o *output) pushBatch(batch []*Event) {
 			continue
 		}
 
+		// Push the batch to all targets
 		for _, t := range tgts {
 			select {
 			case t.chanIn <- e:
@@ -236,25 +177,11 @@ func (o *output) Close() {
 	o.Infof("Closed")
 }
 
-func (o *output) getKeyCarbon(e *Event) (string, error) {
-	pfx, err := getPrefix(e)
-	if err != nil {
-		return "", err
-	}
-
-	return pfx + e.Host + e.Service, nil
+func (o *output) getKey(e *Event) []byte {
+	return eventCompileFields(e, o.hashFields, ".")
 }
 
-func (o *output) getKeyRiemann(e *Event) (string, error) {
-	pfx, err := getPrefix(e)
-	if err != nil {
-		return "", err
-	}
-
-	return pfx + e.Host, nil
-}
-
-func (o *output) getTargetsFailover(key string) (tgts []*target) {
+func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
 	for _, t := range o.tgts {
 		if t.isAlive() {
 			tgts = append(tgts, t)
@@ -265,7 +192,7 @@ func (o *output) getTargetsFailover(key string) (tgts []*target) {
 	return
 }
 
-func (o *output) getTargetsRoundRobin(key string) (tgts []*target) {
+func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
 	if o.tgtNext >= len(o.tgts) {
 		o.tgtNext = 0
 	}
@@ -275,13 +202,13 @@ func (o *output) getTargetsRoundRobin(key string) (tgts []*target) {
 	return
 }
 
-func (o *output) getTargetsHash(key string) (tgts []*target) {
-	id := xxhash.Sum64String(key) % o.tgtCnt
+func (o *output) getTargetsHash(key []byte) (tgts []*target) {
+	id := xxhash.Sum64(key) % o.tgtCnt
 	tgts = append(tgts, o.tgts[id])
 	return
 }
 
-func (o *output) getTargetsBroadcast(key string) (tgts []*target) {
+func (o *output) getTargetsBroadcast(key []byte) (tgts []*target) {
 	return o.tgts
 }
 

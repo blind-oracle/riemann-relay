@@ -26,7 +26,7 @@ func main() {
 	chanClose, chanDrain := make(chan struct{}), make(chan struct{})
 
 	configFile := flag.String("config", "/etc/riemann-relay.toml", "Path to a config file")
-	debug := flag.Bool("debug", false, "Enable debug logging")
+	debug := flag.Bool("debug", false, "Enable debug logging (use with care - a LOT of output)")
 	flag.Parse()
 
 	if *debug {
@@ -39,12 +39,15 @@ func main() {
 	}
 	l.Infof("Configuration loaded")
 
+	// Buffer for event batches coming from listener
 	chanInput := make(chan []*Event, cfg.BufferSize)
-	lis, err = newListener(cfg.Listen, cfg.Timeout.Duration, chanInput)
-	if err != nil {
+
+	// Fire up listener
+	if lis, err = newListener(cfg.Listen, cfg.Timeout.Duration, chanInput); err != nil {
 		l.Fatalf("Unable to set up listener: %s", err)
 	}
 
+	// Fire up outputs
 	for _, ocfg := range cfg.Outputs {
 		o, err := newOutput(ocfg)
 		if err != nil {
@@ -54,20 +57,6 @@ func main() {
 		outputs = append(outputs, o)
 	}
 
-	go func() {
-		sigchannel := make(chan os.Signal, 1)
-		signal.Notify(sigchannel, syscall.SIGTERM, os.Interrupt)
-
-		for sig := range sigchannel {
-			switch sig {
-			case os.Interrupt, syscall.SIGTERM:
-				l.Warnf("Got SIGTERM/Ctrl+C, shutting down")
-				close(chanClose)
-				return
-			}
-		}
-	}()
-
 	pushBatch := func(batch []*Event) {
 		for _, o := range outputs {
 			o.chanIn <- batch
@@ -75,6 +64,7 @@ func main() {
 	}
 
 	wg.Add(1)
+	// Fire up event dispatcher
 	go func() {
 		defer wg.Done()
 		var (
@@ -112,12 +102,31 @@ func main() {
 	l.Infof("HTTP listening to %s", cfg.ListenHTTP)
 	go initHTTP()
 
+	// Set up signal handling
+	go func() {
+		sigchannel := make(chan os.Signal, 1)
+		signal.Notify(sigchannel, syscall.SIGTERM, os.Interrupt)
+
+		for sig := range sigchannel {
+			switch sig {
+			case os.Interrupt, syscall.SIGTERM:
+				l.Warnf("Got SIGTERM/Ctrl+C, shutting down")
+				close(chanClose)
+				return
+			}
+		}
+	}()
+
+	// Wait for shutdown
 	<-chanClose
+
+	// Close listener first and wait for all events to drain to outputs
 	lis.Close()
 	close(chanInput)
 	close(chanDrain)
 	wg.Wait()
 
+	// Drain & close outputs
 	for _, o := range outputs {
 		o.Close()
 	}
