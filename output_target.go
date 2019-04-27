@@ -56,8 +56,9 @@ type target struct {
 
 	wg         sync.WaitGroup
 	wgDispatch sync.WaitGroup
+	wgReady    sync.WaitGroup
 
-	connMtx sync.RWMutex
+	connMtx sync.Mutex
 	sync.RWMutex
 	*logger
 }
@@ -90,8 +91,10 @@ func newOutputTgt(h string, c *outputCfg, o *output) *target {
 	t.batch.timeout = c.BatchTimeout.Duration
 
 	t.wg.Add(1)
+	t.wgReady.Add(1)
 	go t.run()
 
+	t.wgReady.Wait()
 	return t
 }
 
@@ -105,12 +108,15 @@ func (t *target) run() {
 	go t.periodicFlush()
 
 	t.connMtx.Lock()
+
+loop:
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 
 		default:
+			t.wgReady.Done()
 			t.Infof("Connecting...")
 			c, err := t.connect()
 			if err != nil {
@@ -124,7 +130,7 @@ func (t *target) run() {
 				case <-time.After(t.reconnectInterval):
 				}
 
-				continue
+				continue loop
 			}
 
 			t.conn = newTimeoutConn(c, 0, t.timeout)

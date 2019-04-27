@@ -19,8 +19,9 @@ type listener struct {
 	chanOut  chan []*Event
 	shutdown chan struct{}
 
-	acceptWg sync.WaitGroup
-	connWg   sync.WaitGroup
+	wgAccept sync.WaitGroup
+	wgConn   sync.WaitGroup
+	wgReady  sync.WaitGroup
 
 	stats struct {
 		receivedBatches uint64
@@ -51,7 +52,8 @@ func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (
 		l.listeners = append(l.listeners, lis)
 		l.Infof("Listening to '%s'", addr)
 
-		l.acceptWg.Add(1)
+		l.wgAccept.Add(1)
+		l.wgReady.Add(1)
 		go l.accept(lis)
 	}
 
@@ -59,6 +61,7 @@ func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (
 		go l.statsTicker()
 	}
 
+	l.wgReady.Wait()
 	return l, nil
 }
 
@@ -94,8 +97,9 @@ func (l *listener) getStats() string {
 }
 
 func (l *listener) accept(lis *net.TCPListener) {
-	defer l.acceptWg.Done()
+	defer l.wgAccept.Done()
 
+	l.wgReady.Done()
 	for {
 		c, err := lis.AcceptTCP()
 		if err != nil {
@@ -108,7 +112,7 @@ func (l *listener) accept(lis *net.TCPListener) {
 			}
 		}
 
-		l.connWg.Add(1)
+		l.wgConn.Add(1)
 		l.Infof("Connection to '%s' from '%s'", lis.Addr(), c.RemoteAddr())
 
 		// Add connection to a map
@@ -136,7 +140,7 @@ func (l *listener) handleConnection(c net.Conn) {
 		l.Lock()
 		delete(l.conns, peer)
 		l.Unlock()
-		l.connWg.Done()
+		l.wgConn.Done()
 	}()
 
 	var err error
@@ -215,7 +219,7 @@ func (l *listener) Close() {
 	for _, lis := range l.listeners {
 		lis.Close()
 	}
-	l.acceptWg.Wait()
+	l.wgAccept.Wait()
 
 	// Close active connections
 	l.Lock()
@@ -224,7 +228,7 @@ func (l *listener) Close() {
 		c.Close()
 	}
 	l.Unlock()
-	l.connWg.Wait()
+	l.wgConn.Wait()
 
 	l.Infof("Closed")
 }
