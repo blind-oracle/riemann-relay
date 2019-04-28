@@ -1,3 +1,4 @@
 riemann-relay
 riemann-relay.exe
 riemann-relay.dev.toml
+vendor*
