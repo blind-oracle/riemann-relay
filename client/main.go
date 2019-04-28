@@ -35,7 +35,7 @@ func main() {
 			log.Fatalf("Unable to send events: %s", err)
 		}
 
-		if r.GetOk() != true {
+		if !r.GetOk() {
 			log.Fatal("false")
 		}
 	}

@@ -2,19 +2,17 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	log "github.com/sirupsen/logrus"
 )
 
-func initHTTP() (err error) {
+func initHTTP() {
 	http.HandleFunc("/stats", httpStats)
 	http.Handle("/metrics", promhttp.Handler())
-
 	log.Fatal(http.ListenAndServe(cfg.ListenHTTP, nil))
-	return
 }
 
 func httpStats(w http.ResponseWriter, r *http.Request) {

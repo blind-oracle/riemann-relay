@@ -20,10 +20,6 @@ func newTimeoutConn(conn net.Conn, readTimeout time.Duration, writeTimeout time.
 	}
 }
 
-func (t *TimeoutConn) setDL(timeout time.Duration) error {
-	return t.Conn.SetDeadline(time.Now().Add(timeout))
-}
-
 func (t *TimeoutConn) Write(p []byte) (n int, err error) {
 	if t.writeTimeout > 0 {
 		if err = t.Conn.SetWriteDeadline(time.Now().Add(t.writeTimeout)); err != nil {

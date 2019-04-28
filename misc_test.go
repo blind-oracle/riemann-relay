@@ -18,6 +18,8 @@ var (
 			{Key: "key1", Value: "val1"},
 			{Key: "key2", Value: "val2"},
 		},
+		Time:         1234567,
+		MetricSint64: 9876,
 	}
 
 	testRfn = []riemannFieldName{
@@ -72,6 +74,35 @@ func Test_eventCompileFields(t *testing.T) {
 		fields,
 		[]byte("foo.bar.baz.fooz.b.val1"),
 	)
+}
+
+func Test_eventToCarbon(t *testing.T) {
+	rf, _ := parseRiemannFields([]string{"state",
+		"service",
+		"host",
+		"description",
+	})
+
+	c := string(eventToCarbon(testEvent, rf, riemannValueAny))
+	assert.Equal(t, "foo.bar.baz.fooz 9876 1234567", c)
+}
+
+func Benchmark_eventToCarbon(b *testing.B) {
+	rf, _ := parseRiemannFields([]string{"state",
+		"service",
+		"host",
+		"description",
+	})
+
+	for i := 0; i < b.N; i++ {
+		eventToCarbon(testEvent, rf, riemannValueAny)
+	}
+}
+
+func Benchmark_eventCompileFields(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		eventCompileFields(testEvent, testRfn, ".")
+	}
 }
 
 func Test_eventGetAttr(t *testing.T) {

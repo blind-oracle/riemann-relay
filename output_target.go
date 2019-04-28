@@ -7,7 +7,6 @@ import (
 	fmt "fmt"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,7 +41,6 @@ type target struct {
 		flushFailed uint64
 	}
 
-	chanOpen          chan struct{}
 	chanClose         chan struct{}
 	chanDispatchClose chan struct{}
 	chanIn            chan *Event
@@ -298,27 +296,13 @@ func (t *target) writeBatchCarbon(batch []*Event) (err error) {
 
 	t.Debugf("Preparing a batch of %d Carbon metrics", len(batch))
 	for _, e := range batch {
-		buf.Write(t.eventToCarbon(e))
+		buf.Write(eventToCarbon(e, t.o.carbonFields, t.o.carbonValue))
 		buf.WriteByte('\n')
 	}
 
 	t.Debugf("Sending batch")
 	_, err = t.conn.Write(buf.Bytes())
 	return
-}
-
-func (t *target) eventToCarbon(e *Event) []byte {
-	var b bytes.Buffer
-	b.Write(eventCompileFields(e, t.o.carbonFields, "."))
-	b.WriteByte(' ')
-	val := strconv.FormatFloat(eventGetValue(e, t.o.carbonValue), 'f', -1, 64)
-	b.WriteString(val)
-	b.WriteByte(' ')
-	b.WriteString(strconv.FormatInt(e.Time, 10))
-
-	//return []byte(fmt.Sprintf("%s.%s.%s %f %d", pfx, e.Host, e.Service, e.MetricF, e.Time)), nil
-	t.Debugf("Carbon metric: %s", b.String())
-	return b.Bytes()
 }
 
 func (t *target) writeBatchRiemann(batch []*Event) (err error) {
@@ -443,7 +427,6 @@ func (t *target) tryFlush() {
 
 	t.Debugf("Time to flush the batch!")
 	t.flush()
-	return
 }
 
 // Assumes locked batch

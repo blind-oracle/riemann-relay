@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -34,7 +35,7 @@ func (fn riemannFieldName) String() string {
 	case riemannFieldAttr, riemannFieldTag:
 		return fmt.Sprintf("%s:%s", fn.f, fn.name)
 	default:
-		return fmt.Sprintf("%s", fn.f)
+		return fn.f.String()
 	}
 }
 
@@ -204,16 +205,6 @@ func eventGetValue(e *Event, v riemannValue) (o float64) {
 	return
 }
 
-func getPrefix(e *Event) (string, error) {
-	for _, a := range e.Attributes {
-		if a.Key == "prefix" {
-			return a.Value, nil
-		}
-	}
-
-	return "", fmt.Errorf("No 'prefix' found in attributes")
-}
-
 func eventGetAttr(e *Event, name string) *Attribute {
 	for _, a := range e.Attributes {
 		if a.Key == name {
@@ -250,4 +241,15 @@ func readPacket(r io.Reader, p []byte) error {
 	}
 
 	return nil
+}
+
+func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
+	var b bytes.Buffer
+	b.Write(eventCompileFields(e, cf, "."))
+	b.WriteByte(' ')
+	val := strconv.FormatFloat(eventGetValue(e, cv), 'f', -1, 64)
+	b.WriteString(val)
+	b.WriteByte(' ')
+	b.WriteString(strconv.FormatInt(e.Time, 10))
+	return b.Bytes()
 }
