@@ -17,7 +17,7 @@ func sendTestEvent(addr string) (err error) {
 		return
 	}
 
-	r, err := riemanngo.SendEvents(c, &[]riemanngo.Event{riemanngo.Event{
+	r, err := riemanngo.SendEvents(c, &[]riemanngo.Event{{
 		Service:     "foo",
 		Host:        "bar",
 		Description: "baz",

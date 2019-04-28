@@ -1,5 +1,6 @@
 # riemann-relay
 This is a service that receives a Riemann Protobuf-formatted event stream and sends it to a one or more targets in Riemann or Graphite format.
+Although that can be done in Riemann itself, this service is simpler, probably faster and lightweight (no Java)
 
 ## Features
 * Receive event batches in Riemann Protobuf format (see *riemann.proto*) on multiple IPs/Ports, currently TCP only

@@ -15,20 +15,20 @@ var (
 		Description: "fooz",
 		Tags:        []string{"a", "b", "c"},
 		Attributes: []*Attribute{
-			&Attribute{Key: "key1", Value: "val1"},
-			&Attribute{Key: "key2", Value: "val2"},
+			{Key: "key1", Value: "val1"},
+			{Key: "key2", Value: "val2"},
 		},
 	}
 
 	testRfn = []riemannFieldName{
-		riemannFieldName{riemannFieldState, ""},
-		riemannFieldName{riemannFieldService, ""},
-		riemannFieldName{riemannFieldHost, ""},
-		riemannFieldName{riemannFieldDescription, ""},
-		riemannFieldName{riemannFieldTag, "b"},
-		riemannFieldName{riemannFieldTag, "z"},
-		riemannFieldName{riemannFieldAttr, "key1"},
-		riemannFieldName{riemannFieldAttr, "key3"},
+		{riemannFieldState, ""},
+		{riemannFieldService, ""},
+		{riemannFieldHost, ""},
+		{riemannFieldDescription, ""},
+		{riemannFieldTag, "b"},
+		{riemannFieldTag, "z"},
+		{riemannFieldAttr, "key1"},
+		{riemannFieldAttr, "key3"},
 	}
 )
 
