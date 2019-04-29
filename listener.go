@@ -160,14 +160,14 @@ func (l *listener) handleConnection(c net.Conn) {
 	}
 }
 
-func (l *listener) sendReply(ok bool, reason string, c net.Conn) (err error) {
+func (l *listener) sendReply(ok bool, reason string, c net.Conn) error {
 	msg := &Msg{
 		Ok:    ok,
 		Error: reason,
 	}
 
-	buf := make([]byte, len(reason)+128)
-	if buf, err = pb.Marshal(msg); err != nil {
+	buf, err := pb.Marshal(msg)
+	if err != nil {
 		return fmt.Errorf("Unable to marshal Protobuf reply Msg: %s", err)
 	}
 
@@ -179,7 +179,7 @@ func (l *listener) sendReply(ok bool, reason string, c net.Conn) (err error) {
 		return fmt.Errorf("Unable to write reply Protobuf body: %s", err)
 	}
 
-	return
+	return nil
 }
 
 func (l *listener) processMessage(c net.Conn) (err error) {
@@ -201,9 +201,9 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 
 	msg := Msg{}
 	if err = pb.Unmarshal(buf, &msg); err != nil {
-		err = fmt.Errorf("Unable to unmarshal Protobuf: %s", err)
-		l.sendReply(false, err.Error(), c)
-		return
+		l.Errorf("Unable to unmarshal Protobuf message: %s", err)
+		// Don't disconnect just becasue of unmarshal error
+		return l.sendReply(false, "Unable to decode Protobuf message", c)
 	}
 
 	l.Debugf("%s: Message with %d events decoded", peer, len(msg.Events))
