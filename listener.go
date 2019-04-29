@@ -202,7 +202,7 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 	msg := Msg{}
 	if err = pb.Unmarshal(buf, &msg); err != nil {
 		l.Errorf("Unable to unmarshal Protobuf message: %s", err)
-		// Don't disconnect just becasue of unmarshal error
+		// Don't disconnect just because of unmarshal error, just send error message
 		return l.sendReply(false, "Unable to decode Protobuf message", c)
 	}
 
