@@ -51,19 +51,19 @@ func Test_parseRiemannFields(t *testing.T) {
 	assert.Equal(t, testRfn, r)
 
 	f[0] = "abcd"
-	r, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f)
 	assert.NotNil(t, err)
 
 	f[0] = "attr"
-	r, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f)
 	assert.NotNil(t, err)
 
 	f[0] = "tag"
-	r, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f)
 	assert.NotNil(t, err)
 
 	f[0] = "service"
-	r, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f)
 	assert.NotNil(t, err)
 }
 
