@@ -33,6 +33,16 @@ type = "carbon"
 # - failover: send metrics to the first live target (left to right in the target list, see below)
 algo = "hash"
 
+# Try to send to a random live target if the target selected by roundrobin/hash algorithms is dead.
+# Obviously makes no sense for broadcast/failover algorithms.
+#
+# If this is false then the events for the down targets will be accumulated in their buffers and,
+# if the target is down for an extended period of time, new events will be discarded.
+#
+# Be aware that the status of the target is not be reflected instantly and some metrics might anyway
+# go to target's buffer while it's considered alive.
+algo_failover = false
+
 # List of Riemann event fields to use as a hashing key, required if the 'algo' is 'hash'
 # These are evaluated left-to-right.
 #
@@ -68,8 +78,9 @@ carbon_fields = [ "attr:prefix", "host", "service" ]
 # - double
 # - any
 # 
-# If you specify 'any' then all fields are checked (int -> float -> double)
+# If you specify 'any' then all fields are checked (double -> int -> float)
 # and first non-zero is used as a value. If all of them are zero then zero is used.
+# This is probably the same that Riemann itself does according to docs.
 #
 # Value is converted to float64
 carbon_value = "any"

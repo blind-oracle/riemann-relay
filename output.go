@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,8 +15,10 @@ import (
 type output struct {
 	name string
 
-	typ  outputType
-	algo outputAlgo
+	typ outputType
+
+	algo         outputAlgo
+	algoFailover bool
 
 	hashFields   []riemannFieldName
 	carbonFields []riemannFieldName
@@ -38,6 +41,7 @@ type output struct {
 	}
 
 	chanIn chan []*Event
+	rnd    *rand.Rand
 	*logger
 }
 
@@ -52,19 +56,17 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		return nil, fmt.Errorf("Unknown algorithm '%s'", c.Algo)
 	}
 
-	cbv, ok := riemannValueMap[c.CarbonValue]
-	if !ok {
-		return nil, fmt.Errorf("Unknown Carbon value '%s'", c.CarbonValue)
-	}
-
 	o = &output{
-		name:        c.Name,
-		typ:         typ,
-		algo:        algo,
-		carbonValue: cbv,
-		tgtCnt:      uint64(len(c.Targets)),
-		chanIn:      make(chan []*Event),
-		logger:      &logger{c.Name},
+		name: c.Name,
+		typ:  typ,
+
+		algo:         algo,
+		algoFailover: c.AlgoFailover,
+
+		tgtCnt: uint64(len(c.Targets)),
+		chanIn: make(chan []*Event),
+		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		logger: &logger{c.Name},
 	}
 
 	switch algo {
@@ -78,6 +80,8 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		o.getTargets = o.getTargetsBroadcast
 	}
 
+	o.Infof("Starting output (type '%s', algo '%s')", typ, algo)
+
 	if algo == outputAlgoHash {
 		if o.hashFields, err = parseRiemannFields(c.HashFields); err != nil {
 			return
@@ -86,6 +90,8 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		if len(o.hashFields) == 0 {
 			return nil, fmt.Errorf("You need to specify hash_fields")
 		}
+
+		o.Infof("Hash fields: %v", o.hashFields)
 	}
 
 	if typ == outputTypeCarbon {
@@ -96,9 +102,14 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		if len(o.carbonFields) == 0 {
 			return nil, fmt.Errorf("You need to specify carbon_fields for output type 'carbon'")
 		}
+
+		if o.carbonValue, ok = riemannValueMap[c.CarbonValue]; !ok {
+			return nil, fmt.Errorf("Unknown Carbon value '%s'", c.CarbonValue)
+		}
+
+		o.Infof("Carbon fields: %v, value: %s", o.carbonFields, o.carbonValue)
 	}
 
-	o.Infof("Starting output (type '%s', algo '%s', hash fields: %v, carbon fields: %v)", typ, algo, o.hashFields, o.carbonFields)
 	o.ctx, o.ctxCancel = context.WithCancel(context.Background())
 
 	for _, h := range c.Targets {
@@ -151,7 +162,7 @@ func (o *output) pushBatch(batch []*Event) {
 			continue
 		}
 
-		// Push the batch to all targets
+		// Push the batch to all selected targets
 		for _, t := range tgts {
 			select {
 			case t.chanIn <- e:
@@ -181,15 +192,27 @@ func (o *output) getKey(e *Event) []byte {
 	return eventCompileFields(e, o.hashFields, ".")
 }
 
-func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
+func (o *output) getLiveTarget(random bool) (tgts []*target) {
 	for _, t := range o.tgts {
 		if t.isAlive() {
 			tgts = append(tgts, t)
-			return
+			if !random {
+				return
+			}
 		}
 	}
 
-	return
+	if len(tgts) == 0 {
+		return
+	}
+
+	return []*target{
+		tgts[o.rnd.Intn(len(tgts))],
+	}
+}
+
+func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
+	return o.getLiveTarget(false)
 }
 
 func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
@@ -197,14 +220,24 @@ func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
 		o.tgtNext = 0
 	}
 
-	tgts = append(tgts, o.tgts[o.tgtNext])
+	tgts = []*target{o.tgts[o.tgtNext]}
 	o.tgtNext++
+
+	if o.algoFailover && !tgts[0].isAlive() {
+		tgts = o.getLiveTarget(true)
+	}
+
 	return
 }
 
 func (o *output) getTargetsHash(key []byte) (tgts []*target) {
 	id := xxhash.Sum64(key) % o.tgtCnt
-	tgts = append(tgts, o.tgts[id])
+	tgts = []*target{o.tgts[id]}
+
+	if o.algoFailover && !tgts[0].isAlive() {
+		tgts = o.getLiveTarget(true)
+	}
+
 	return
 }
 

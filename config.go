@@ -23,6 +23,7 @@ type outputCfg struct {
 	Type string
 
 	Algo         string
+	AlgoFailover bool     `toml:"algo_failover"`
 	HashFields   []string `toml:"hash_fields"`
 	CarbonFields []string `toml:"carbon_fields"`
 	CarbonValue  string   `toml:"carbon_value"`

@@ -39,6 +39,10 @@ func (fn riemannFieldName) String() string {
 	}
 }
 
+func (v riemannValue) String() string {
+	return riemannValueMapRev[v]
+}
+
 const (
 	outputTypeCarbon outputType = iota
 	outputTypeRiemann
@@ -193,12 +197,12 @@ func eventGetValue(e *Event, v riemannValue) (o float64) {
 	case riemannValueDouble:
 		o = e.MetricD
 	case riemannValueAny:
-		if e.MetricSint64 > 0 {
+		if e.MetricD > 0 {
+			o = e.MetricD
+		} else if e.MetricSint64 > 0 {
 			o = float64(e.MetricSint64)
-		} else if e.MetricF > 0 {
-			o = float64(e.MetricF)
 		} else {
-			o = float64(e.MetricD)
+			o = float64(e.MetricF)
 		}
 	}
 

@@ -19,10 +19,11 @@ func main() {
 	events := []riemanngo.Event{}
 	for i := 0; i < 200; i++ {
 		events = append(events, riemanngo.Event{
-			Service: "hello",
-			Host:    strconv.Itoa(rand.Intn(1000000000000)),
-			Metric:  100,
-			Tags:    []string{"foobar"},
+			Service:     "hello",
+			Host:        strconv.Itoa(rand.Intn(1000000000000)),
+			Description: strconv.Itoa(rand.Intn(1000000000000)),
+			Metric:      100,
+			Tags:        []string{"foobar"},
 			Attributes: map[string]string{
 				"prefix": "aabbccdd",
 			},

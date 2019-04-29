@@ -148,6 +148,7 @@ func (l *listener) handleConnection(c net.Conn) {
 		if err = l.processMessage(c); err != nil {
 			select {
 			case <-l.shutdown:
+				return
 			default:
 				if err != io.EOF {
 					l.Warnf("%s: Unable to process message: %s", peer, err)
@@ -157,6 +158,28 @@ func (l *listener) handleConnection(c net.Conn) {
 			return
 		}
 	}
+}
+
+func (l *listener) sendReply(ok bool, reason string, c net.Conn) (err error) {
+	msg := &Msg{
+		Ok:    ok,
+		Error: reason,
+	}
+
+	buf := make([]byte, len(reason)+128)
+	if buf, err = pb.Marshal(msg); err != nil {
+		return fmt.Errorf("Unable to marshal Protobuf reply Msg: %s", err)
+	}
+
+	if err = binary.Write(c, binary.BigEndian, uint32(len(buf))); err != nil {
+		return fmt.Errorf("Unable to write reply Protobuf length: %s", err)
+	}
+
+	if _, err = c.Write(buf); err != nil {
+		return fmt.Errorf("Unable to write reply Protobuf body: %s", err)
+	}
+
+	return
 }
 
 func (l *listener) processMessage(c net.Conn) (err error) {
@@ -178,7 +201,9 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 
 	msg := Msg{}
 	if err = pb.Unmarshal(buf, &msg); err != nil {
-		return fmt.Errorf("Unable to unmarshal Protobuf: %s", err)
+		err = fmt.Errorf("Unable to unmarshal Protobuf: %s", err)
+		l.sendReply(false, err.Error(), c)
+		return
 	}
 
 	l.Debugf("%s: Message with %d events decoded", peer, len(msg.Events))
@@ -193,22 +218,8 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 		atomic.AddUint64(&l.stats.dropped, 1)
 	}
 
-	msg.Reset()
-	msg.Ok = true
-	if buf, err = pb.Marshal(&msg); err != nil {
-		return fmt.Errorf("Unable to marshal Protobuf reply Msg: %s", err)
-	}
-
-	if err = binary.Write(c, binary.BigEndian, uint32(len(buf))); err != nil {
-		return fmt.Errorf("Unable to write reply Protobuf length: %s", err)
-	}
-
-	if _, err = c.Write(buf); err != nil {
-		return fmt.Errorf("Unable to write reply Protobuf body: %s", err)
-	}
-
 	l.Debugf("%s: Message processing finished, OK sent", peer)
-	return
+	return l.sendReply(true, "", c)
 }
 
 func (l *listener) Close() {

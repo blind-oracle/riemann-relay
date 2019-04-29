@@ -107,6 +107,7 @@ func (t *target) run() {
 
 	t.connMtx.Lock()
 
+	t.wgReady.Done()
 loop:
 	for {
 		select {
@@ -114,7 +115,6 @@ loop:
 			return
 
 		default:
-			t.wgReady.Done()
 			t.Infof("Connecting...")
 			c, err := t.connect()
 			if err != nil {
