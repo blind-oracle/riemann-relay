@@ -4,7 +4,7 @@
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge-flat.svg)](https://github.com/avelino/awesome-go)
 
 # riemann-relay
-This is a service that receives a Riemann Protobuf-formatted event stream and sends it to a one or more targets in Riemann or Graphite format.
+This is a service that receives a Riemann Protobuf-formatted event stream and sends it to one or more targets in Riemann or Graphite format.
 Although that can be done in Riemann itself, this service is simpler, probably faster and lightweight (no Java)
 
 ## Features
@@ -16,19 +16,23 @@ Although that can be done in Riemann itself, this service is simpler, probably f
   - Hash
   - Failover
   - Broadcast
+* Optional failover to other targets if the selected one is down (in Hash and Round-Robin modes)
 * Prometheus metrics
 * Log stats periodically
 * Configurable batch and buffer sizes, flush intervals, timeouts
 
-See *riemann-relay.toml* for more details on these features and how to configure them
+See *riemann-relay.toml* for more details on features and how to configure them
 
 ## Performance
-On 2 average CPU cores it's able to handle about 500k events per second, depending on batch size and incoming riemann message sizes.
+On 2 average CPU cores it's able to handle about 500k events per second, depending on batch size and incoming Riemann message sizes.
 It will scale to more CPUs when using more targets and clients (each target and client gets it's own thread).
 There's a room for optimizations, though.
 
+## Install
+For now in the releases only binaries for *linux-amd64* are available. For other platforms see the *Build* section below.
+
 ## Build
-**riemann-relay** is written in Go and uses Dep as a dependency manager, so you need to install them first.
+**riemann-relay** is written in [Go](https://golang.org/) and uses [dep](https://github.com/golang/dep) as a dependency manager, so you need to install them first.
 
 Then:
 ```bash

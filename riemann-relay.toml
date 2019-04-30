@@ -34,17 +34,17 @@ type = "carbon"
 algo = "hash"
 
 # Try to send to a random live target if the target selected by roundrobin/hash algorithms is dead.
-# Obviously makes no sense for broadcast/failover algorithms.
+# Obviously this makes no sense for broadcast/failover algorithms.
 #
-# If this is false then the events for the down targets will be accumulated in their buffers and,
+# If this is 'false' then the events for the down targets will be accumulated in their buffers and,
 # if the target is down for an extended period of time, new events will be discarded.
 #
-# Be aware that the status of the target is not be reflected instantly and some metrics might anyway
-# go to target's buffer while it's considered alive.
+# Be aware that the status of the target is not be reflected instantly and some small number of metrics
+# might anyway go to target's buffer while it's still considered alive.
 algo_failover = false
 
 # List of Riemann event fields to use as a hashing key, required if the 'algo' is 'hash'
-# These are evaluated left-to-right.
+# These are evaluated left-to-right, although for hashing purposes it does not matter.
 #
 # Possible values:
 # - state
@@ -63,8 +63,8 @@ algo_failover = false
 # If there's no tag/attribute found by this name then it's ignored
 hash_fields = [ "attr:foo", "host", "service", "tag:bar" ]
 
-# List of Riemann event fields to use to form a Carbon metric name, required if output type is 'carbon'
-# The values of the fields are joined together with a '.' separator per Carbon specs
+# List of Riemann event fields to use to form a Carbon metric name, required if output type is 'carbon'.
+# The values of the fields are joined together with a '.' separator per Carbon specs.
 #
 # For syntax see 'hash_fields' parameter up there.
 carbon_fields = [ "attr:prefix", "host", "service" ]
@@ -77,7 +77,7 @@ carbon_fields = [ "attr:prefix", "host", "service" ]
 # - float
 # - double
 # - any
-# 
+#
 # If you specify 'any' then all fields are checked (double -> int -> float)
 # and first non-zero is used as a value. If all of them are zero then zero is used.
 # This is probably the same that Riemann itself does according to docs.
@@ -88,18 +88,19 @@ carbon_value = "any"
 # List of IP:Port targets
 targets = [ "1.1.1.1:1234", "2.2.2.2:1234", "3.3.3.3:1234" ]
 
-# Output metric buffer size *per target* (count of events)
+# Output metric buffer size *per target* (number of events)
 #
-# If the target is down then the metrics are accumulated in this buffer until the target is up again
-# If the buffer is full then new metrics will be discarded
+# If the target is down then the metrics are accumulated in this buffer until
+# the target is up again (unless 'algo_failover' is 'true')
+# If the buffer is full then new metrics will be discarded.
 buffer_size = 2000000
 
-# Count of metrics/events to send in one iteration
+# Number of metrics/events to send in one iteration.
 #
 # For Carbon this is a number of metrics in a single TCP write (larger batch -> fewer system calls)
-# For Riemann this is a number of events sent in a single Protobuf message
-# 
-# If the amount of pending metrics is equal to this value then they're flushed immediately
+# For Riemann this is a number of events sent in a single Protobuf message.
+#
+# If the amount of pending metrics is equal to this value then they're flushed immediately.
 # If it's less then it will be flushed every 'batch_timeout'
 batch_size = 50
 

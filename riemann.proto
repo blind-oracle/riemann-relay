@@ -16,14 +16,9 @@ message Event {
   float metric_f = 15;
 }
 
-message Query {
-  string string = 1;
-}
-
 message Msg {
   bool ok = 2;
   string error = 3;
-  Query query = 5;
   repeated Event events = 6;
 }
 
