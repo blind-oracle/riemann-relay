@@ -20,6 +20,7 @@ Although that can be done in Riemann itself, this service is simpler, probably f
 * Prometheus metrics
 * Log stats periodically
 * Configurable batch and buffer sizes, flush intervals, timeouts
+* Build RPM and DEB packages
 
 See *riemann-relay.toml* for more details on features and how to configure them
 
@@ -38,6 +39,15 @@ Then:
 ```bash
 # dep ensure
 # go build
+```
+
+## Packaging
+To build RPM & DEB packages you'll need [gox](https://github.com/mitchellh/gox) and [fpm](https://github.com/jordansissel/fpm).
+
+Then just do one of:
+```bash
+# make rpm
+# make deb
 ```
 
 ## Run

@@ -1,0 +1,14 @@
+[Unit]
+Description=Service for relaying RIemann events to Riemann/Carbon destinations
+Documentation=https://github.com/blind-oracle/riemann-relay
+After=network.target
+
+[Service]
+Type=simple
+PermissionsStartOnly=true
+ExecStart=/usr/bin/riemann-relay -config /etc/riemann-relay/riemann-relay.conf
+Restart=on-failure
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
