@@ -25,7 +25,7 @@ func main() {
 	l := &logger{"Main"}
 	chanClose, chanDrain := make(chan struct{}), make(chan struct{})
 
-	configFile := flag.String("config", "/etc/riemann-relay.toml", "Path to a config file")
+	configFile := flag.String("config", "/etc/riemann-relay/riemann-relay.conf", "Path to a config file")
 	debug := flag.Bool("debug", false, "Enable debug logging (use with care - a LOT of output)")
 	flag.Parse()
 
