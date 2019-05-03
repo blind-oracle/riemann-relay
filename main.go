@@ -43,7 +43,7 @@ func main() {
 	chanInput := make(chan []*Event, cfg.BufferSize)
 
 	// Fire up listener
-	if lis, err = newListener(cfg.Listen, cfg.Timeout.Duration, chanInput); err != nil {
+	if lis, err = newListener(chanInput); err != nil {
 		l.Fatalf("Unable to set up listener: %s", err)
 	}
 

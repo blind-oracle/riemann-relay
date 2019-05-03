@@ -38,17 +38,22 @@ type outputCfg struct {
 }
 
 type config struct {
-	Listen        []string
-	ListenHTTP    string
+	Listen     string
+	ListenWS   string
+	ListenHTTP string
+
 	Timeout       duration
-	StatsInterval duration              `toml:"stats_interval"`
-	BufferSize    int                   `toml:"buffer_size"`
-	Outputs       map[string]*outputCfg `toml:"output"`
+	StatsInterval duration `toml:"stats_interval"`
+
+	BufferSize int                   `toml:"buffer_size"`
+	Outputs    map[string]*outputCfg `toml:"output"`
 }
 
 func defaultConfig() config {
 	return config{
-		Listen:        []string{"127.0.0.1:32167"},
+		Listen:        "127.0.0.1:12345",
+		ListenWS:      "127.0.0.1:12346",
+		ListenHTTP:    "127.0.0.1:12347",
 		StatsInterval: duration{60 * time.Second},
 		Timeout:       duration{30 * time.Second},
 		BufferSize:    50000,

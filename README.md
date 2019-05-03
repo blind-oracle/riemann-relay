@@ -8,7 +8,8 @@ This is a service that receives a Riemann Protobuf-formatted event stream and se
 Although that can be done in Riemann itself, this service is simpler, probably faster and lightweight (no Java)
 
 ## Features
-* Receive event batches in Riemann Protobuf format (see *riemann.proto*) on multiple IPs/Ports, currently TCP only
+* Receive event batches in Riemann Protobuf format (see *riemann.proto*) using TCP
+* Receive events in Riemann JSON format using Websocket API
 * Convert Riemann events to Carbon metrics using flexible field mapping syntax
 * Send events in configurable batch sizes to any number of Riemann/Carbon targets
 * Different target selection algorithms:
@@ -28,6 +29,27 @@ See *riemann-relay.toml* for more details on features and how to configure them
 On 2 average CPU cores it's able to handle about 500k events per second, depending on batch size and incoming Riemann message sizes.
 It will scale to more CPUs when using more targets and clients (each target and client gets it's own thread).
 There's a room for optimizations, though.
+
+## JSON URI and Event structure for Websocket
+URI: ws://1.1.1.1:1234/events
+
+```json
+{
+    "host": "host1",
+    "service": "svc1",
+    "description": "cool",
+    "state": "ok",
+    "tags": ["tag1", "tag2"],
+    "metric": 123,
+    "time": "2018-04-10T13:36:04.787Z",
+    "attributes": [
+        {
+            "key": "key1",
+            "value": "val1"
+        }
+    ]
+}
+```
 
 ## Install
 For now in the releases only binaries for *linux-amd64* are available. For other platforms see the *Build* section below.

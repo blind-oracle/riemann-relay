@@ -1,27 +1,38 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	pb "github.com/golang/protobuf/proto"
 )
 
+type wsError struct {
+	Error string
+}
+
 type listener struct {
-	listeners []*net.TCPListener
-	timeout   time.Duration
+	listenerTCP *net.TCPListener
+	listenerWS  *http.Server
+	wsUpgrader  websocket.Upgrader
+
+	timeout time.Duration
 
 	chanOut  chan []*Event
 	shutdown chan struct{}
 
 	wgAccept sync.WaitGroup
 	wgConn   sync.WaitGroup
-	wgReady  sync.WaitGroup
 
 	stats struct {
 		receivedBatches uint64
@@ -34,34 +45,61 @@ type listener struct {
 	*logger
 }
 
-func newListener(addrs []string, timeout time.Duration, chanOut chan []*Event) (*listener, error) {
-	l := &listener{
-		timeout:  timeout,
+func newListener(chanOut chan []*Event) (l *listener, err error) {
+	l = &listener{
+		timeout:  cfg.Timeout.Duration,
 		chanOut:  chanOut,
 		shutdown: make(chan struct{}),
 		conns:    map[string]*net.TCPConn{},
 		logger:   &logger{"Listener"},
 	}
 
-	for _, addr := range addrs {
-		lis, err := listen(addr)
-		if err != nil {
-			return nil, fmt.Errorf("Unable to listen to '%s': %s", addr, err)
+	l.wsUpgrader = websocket.Upgrader{
+		HandshakeTimeout: l.timeout,
+	}
+
+	if cfg.Listen == "" && cfg.ListenWS == "" {
+		return nil, fmt.Errorf("At least one of listenTCP/listenWS should be specified")
+	}
+
+	if cfg.Listen != "" {
+		if l.listenerTCP, err = listen(cfg.Listen); err != nil {
+			return nil, fmt.Errorf("Unable to listen to '%s': %s", cfg.Listen, err)
 		}
 
-		l.listeners = append(l.listeners, lis)
-		l.Infof("Listening to '%s'", addr)
-
 		l.wgAccept.Add(1)
-		l.wgReady.Add(1)
-		go l.accept(lis)
+		go l.acceptTCP()
+		l.Infof("Listening to '%s'", cfg.Listen)
+	}
+
+	if cfg.ListenWS != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/events", l.hanleWebsocketConnection)
+
+		l.listenerWS = &http.Server{
+			Addr:         cfg.ListenWS,
+			Handler:      mux,
+			ReadTimeout:  l.timeout,
+			WriteTimeout: l.timeout,
+		}
+
+		go func() {
+			if err := l.listenerWS.ListenAndServe(); err != nil {
+				if err == http.ErrServerClosed {
+					return
+				}
+
+				l.Fatalf("Websocket HTTP listener error: %s", err)
+			}
+		}()
+
+		l.Infof("Websocket listening to '%s'", cfg.ListenWS)
 	}
 
 	if cfg.StatsInterval.Duration > 0 {
 		go l.statsTicker()
 	}
 
-	l.wgReady.Wait()
 	return l, nil
 }
 
@@ -96,24 +134,23 @@ func (l *listener) getStats() string {
 	)
 }
 
-func (l *listener) accept(lis *net.TCPListener) {
+func (l *listener) acceptTCP() {
 	defer l.wgAccept.Done()
 
-	l.wgReady.Done()
 	for {
-		c, err := lis.AcceptTCP()
+		c, err := l.listenerTCP.AcceptTCP()
 		if err != nil {
 			select {
 			case <-l.shutdown:
-				l.Infof("%s: Accepter closing", lis.Addr())
+				l.Infof("Accepter closing")
 				return
 			default:
-				l.Errorf("%s: Error accepting : %s", lis.Addr(), err)
+				l.Errorf("Error accepting : %s", err)
 			}
 		}
 
 		l.wgConn.Add(1)
-		l.Infof("Connection to '%s' from '%s'", lis.Addr(), c.RemoteAddr())
+		l.Infof("Connection from '%s'", c.RemoteAddr())
 
 		// Add connection to a map
 		l.Lock()
@@ -125,11 +162,11 @@ func (l *listener) accept(lis *net.TCPListener) {
 		l.conns[id] = c
 		l.Unlock()
 
-		go l.handleConnection(newTimeoutConn(c, l.timeout, l.timeout))
+		go l.handleTCPConnection(newTimeoutConn(c, l.timeout, l.timeout))
 	}
 }
 
-func (l *listener) handleConnection(c net.Conn) {
+func (l *listener) handleTCPConnection(c net.Conn) {
 	peer := c.RemoteAddr().String()
 
 	defer func() {
@@ -145,7 +182,7 @@ func (l *listener) handleConnection(c net.Conn) {
 
 	var err error
 	for {
-		if err = l.processMessage(c); err != nil {
+		if err = l.readTCPMessage(c); err != nil {
 			select {
 			case <-l.shutdown:
 				return
@@ -182,9 +219,64 @@ func (l *listener) sendReply(ok bool, reason string, c net.Conn) error {
 	return nil
 }
 
-func (l *listener) processMessage(c net.Conn) (err error) {
-	peer := c.RemoteAddr().String()
+func (l *listener) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request) {
+	l.Infof("%s: Websocket connection", r.RemoteAddr)
 
+	c, err := l.wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		l.Errorf("%s: Websocket upgrade failed: %s", r.RemoteAddr, err)
+	}
+
+	defer func() {
+		l.Infof("%s: Websocket connection closed", r.RemoteAddr)
+		c.Close()
+	}()
+
+	var (
+		wsMsgType int
+		wsMsg     []byte
+		ev        *Event
+	)
+
+	sendWSError := func(msg string) error {
+		errMsg := &wsError{msg}
+		js, _ := json.Marshal(errMsg)
+		return c.WriteMessage(websocket.TextMessage, js)
+	}
+
+	for {
+		if wsMsgType, wsMsg, err = c.ReadMessage(); err != nil {
+			if websocket.IsCloseError(err, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return
+			}
+
+			l.Errorf("%s: Unable to read Websocket message: %s", r.RemoteAddr, err)
+			return
+		}
+
+		if wsMsgType != websocket.TextMessage {
+			l.Warnf("%s: Unexpected message type received (%d), dropping", r.RemoteAddr, wsMsgType)
+			if err = sendWSError("Unexpected message type"); err != nil {
+				return
+			}
+
+			continue
+		}
+
+		if ev, err = eventFromJSON(wsMsg); err != nil {
+			l.Warnf("%s: Unable to unmarshal Websocket message to JSON, dropping: %s", r.RemoteAddr, err)
+			if err = sendWSError("Unable to parse event JSON"); err != nil {
+				return
+			}
+
+			continue
+		}
+
+		l.sendEvents([]*Event{ev})
+	}
+}
+
+func (l *listener) readTCPMessage(c net.Conn) (err error) {
 	var hdr uint32
 	if err = binary.Read(c, binary.BigEndian, &hdr); err != nil {
 		if err == io.EOF {
@@ -199,37 +291,54 @@ func (l *listener) processMessage(c net.Conn) (err error) {
 		return fmt.Errorf("Unable to read Protobuf body: %s", err)
 	}
 
-	msg := Msg{}
-	if err = pb.Unmarshal(buf, &msg); err != nil {
+	msg := &Msg{}
+	if err = pb.Unmarshal(buf, msg); err != nil {
 		l.Errorf("Unable to unmarshal Protobuf message: %s", err)
-		// Don't disconnect just because of unmarshal error, just send error message
+		// Don't disconnect just because of unmarshal error
+		// Try to send error message and wait for next event batch
 		return l.sendReply(false, "Unable to decode Protobuf message", c)
 	}
 
-	l.Debugf("%s: Message with %d events decoded", peer, len(msg.Events))
+	l.sendEvents(msg.Events)
+	return l.sendReply(true, "", c)
+}
+
+func (l *listener) sendEvents(events []*Event) {
+	for _, ev := range events {
+		if ev.TimeMicros == 0 && ev.Time == 0 {
+			ev.TimeMicros = time.Now().UnixNano() / 1000
+		}
+	}
 
 	select {
-	case l.chanOut <- msg.Events:
+	case l.chanOut <- events:
 		atomic.AddUint64(&l.stats.receivedBatches, 1)
-		atomic.AddUint64(&l.stats.receivedEvents, uint64(len(msg.Events)))
+		atomic.AddUint64(&l.stats.receivedEvents, uint64(len(events)))
 	case <-l.shutdown:
 		return
 	default:
 		atomic.AddUint64(&l.stats.dropped, 1)
 	}
 
-	l.Debugf("%s: Message processing finished, OK sent", peer)
-	return l.sendReply(true, "", c)
+	return
 }
 
 func (l *listener) Close() {
 	l.Infof("Closing...")
 	close(l.shutdown)
 
-	// Shut down listeners
-	for _, lis := range l.listeners {
-		lis.Close()
+	if l.listenerTCP != nil {
+		l.listenerTCP.Close()
+		l.Infof("TCP closed")
 	}
+
+	if l.listenerWS != nil {
+		ctx, cf := context.WithTimeout(context.Background(), 10*time.Second)
+		l.listenerWS.Shutdown(ctx)
+		cf()
+		l.Infof("Websocket closed")
+	}
+
 	l.wgAccept.Wait()
 
 	// Close active connections

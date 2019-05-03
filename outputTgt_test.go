@@ -31,10 +31,10 @@ func Test_outputRiemann(t *testing.T) {
 	cfg.StatsInterval.Duration = 50 * time.Millisecond
 
 	ch := make(chan []*Event, 10)
-	l, addr, err := getTestListener(ch)
+	l, err := getTestListener(ch)
 	assert.Nil(t, err)
 
-	testCfg.Targets = []string{addr}
+	testCfg.Targets = []string{cfg.Listen}
 	test := func(algo string) {
 		testCfg.Algo = algo
 		o, err := newOutput(testCfg)

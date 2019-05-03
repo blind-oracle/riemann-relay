@@ -249,11 +249,21 @@ func readPacket(r io.Reader, p []byte) error {
 
 func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 	var b bytes.Buffer
+
 	b.Write(eventCompileFields(e, cf, "."))
 	b.WriteByte(' ')
+
 	val := strconv.FormatFloat(eventGetValue(e, cv), 'f', -1, 64)
 	b.WriteString(val)
 	b.WriteByte(' ')
-	b.WriteString(strconv.FormatInt(e.Time, 10))
+
+	var t int64
+	if e.TimeMicros > 0 {
+		t = e.TimeMicros
+	} else {
+		t = e.Time
+	}
+
+	b.WriteString(strconv.FormatInt(t, 10))
 	return b.Bytes()
 }
