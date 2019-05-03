@@ -34,7 +34,7 @@ func Test_outputRiemann(t *testing.T) {
 	l, err := getTestListener(ch)
 	assert.Nil(t, err)
 
-	testCfg.Targets = []string{cfg.Listen}
+	testCfg.Targets = []string{cfg.ListenTCP}
 	test := func(algo string) {
 		testCfg.Algo = algo
 		o, err := newOutput(testCfg)

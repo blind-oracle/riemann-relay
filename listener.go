@@ -58,18 +58,18 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 		HandshakeTimeout: l.timeout,
 	}
 
-	if cfg.Listen == "" && cfg.ListenWS == "" {
+	if cfg.ListenTCP == "" && cfg.ListenWS == "" {
 		return nil, fmt.Errorf("At least one of listenTCP/listenWS should be specified")
 	}
 
-	if cfg.Listen != "" {
-		if l.listenerTCP, err = listen(cfg.Listen); err != nil {
-			return nil, fmt.Errorf("Unable to listen to '%s': %s", cfg.Listen, err)
+	if cfg.ListenTCP != "" {
+		if l.listenerTCP, err = listen(cfg.ListenTCP); err != nil {
+			return nil, fmt.Errorf("Unable to listen to '%s': %s", cfg.ListenTCP, err)
 		}
 
 		l.wgAccept.Add(1)
 		go l.acceptTCP()
-		l.Infof("Listening to '%s'", cfg.Listen)
+		l.Infof("Listening to '%s'", cfg.ListenTCP)
 	}
 
 	if cfg.ListenWS != "" {

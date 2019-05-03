@@ -38,7 +38,7 @@ type outputCfg struct {
 }
 
 type config struct {
-	Listen     string
+	ListenTCP  string
 	ListenWS   string
 	ListenHTTP string
 
@@ -51,7 +51,7 @@ type config struct {
 
 func defaultConfig() config {
 	return config{
-		Listen:        "127.0.0.1:12345",
+		ListenTCP:     "127.0.0.1:12345",
 		ListenWS:      "127.0.0.1:12346",
 		ListenHTTP:    "127.0.0.1:12347",
 		StatsInterval: duration{60 * time.Second},
