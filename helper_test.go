@@ -19,6 +19,7 @@ var (
 			{Key: "key2", Value: "val2"},
 		},
 		Time:         1234567,
+		TimeMicros:   1234567000000,
 		MetricSint64: 9876,
 	}
 

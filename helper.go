@@ -259,7 +259,7 @@ func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 
 	var t int64
 	if e.TimeMicros > 0 {
-		t = e.TimeMicros
+		t = e.TimeMicros / 1000000
 	} else {
 		t = e.Time
 	}
