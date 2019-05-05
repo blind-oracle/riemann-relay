@@ -240,7 +240,7 @@ func (t *target) connect() (c net.Conn, err error) {
 		Timeout: t.connTimeout,
 	}
 
-	return dialer.DialContext(t.ctx, "tcp", t.host)
+	return dialer.DialContext(t.ctx, guessProto(t.host), t.host)
 }
 
 func (t *target) dispatch() {

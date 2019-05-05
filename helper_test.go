@@ -124,3 +124,8 @@ func Test_readPacket(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, c, b1)
 }
+
+func Test_guessProto(t *testing.T) {
+	assert.Equal(t, "tcp", guessProto("1.1.1.1:1"))
+	assert.Equal(t, "unix", guessProto("/tmp/socket"))
+}

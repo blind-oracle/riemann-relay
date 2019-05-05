@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -266,4 +267,12 @@ func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 
 	b.WriteString(strconv.FormatInt(t, 10))
 	return b.Bytes()
+}
+
+func guessProto(addr string) (proto string) {
+	if _, err := net.ResolveTCPAddr("tcp", addr); err == nil {
+		return "tcp"
+	}
+
+	return "unix"
 }

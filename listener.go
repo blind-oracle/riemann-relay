@@ -22,9 +22,9 @@ type wsError struct {
 }
 
 type listener struct {
-	listenerTCP *net.TCPListener
-	listenerWS  *http.Server
-	wsUpgrader  websocket.Upgrader
+	listener   net.Listener
+	listenerWS *http.Server
+	wsUpgrader websocket.Upgrader
 
 	timeout time.Duration
 
@@ -40,7 +40,7 @@ type listener struct {
 		dropped         uint64
 	}
 
-	conns map[string]*net.TCPConn
+	conns map[string]net.Conn
 	sync.Mutex
 	*logger
 }
@@ -50,7 +50,7 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 		timeout:  cfg.Timeout.Duration,
 		chanOut:  chanOut,
 		shutdown: make(chan struct{}),
-		conns:    map[string]*net.TCPConn{},
+		conns:    map[string]net.Conn{},
 		logger:   &logger{"Listener"},
 	}
 
@@ -58,18 +58,18 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 		HandshakeTimeout: l.timeout,
 	}
 
-	if cfg.ListenTCP == "" && cfg.ListenWS == "" {
+	if cfg.Listen == "" && cfg.ListenWS == "" {
 		return nil, fmt.Errorf("At least one of listenTCP/listenWS should be specified")
 	}
 
-	if cfg.ListenTCP != "" {
-		if l.listenerTCP, err = listen(cfg.ListenTCP); err != nil {
-			return nil, fmt.Errorf("Unable to listen to '%s': %s", cfg.ListenTCP, err)
+	if cfg.Listen != "" {
+		if l.listener, err = listen(cfg.Listen); err != nil {
+			return nil, fmt.Errorf("Unable to listen to '%s': %s", cfg.Listen, err)
 		}
 
 		l.wgAccept.Add(1)
 		go l.acceptTCP()
-		l.Infof("Listening to '%s'", cfg.ListenTCP)
+		l.Infof("Listening to '%s'", cfg.Listen)
 	}
 
 	if cfg.ListenWS != "" {
@@ -77,14 +77,18 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 		mux.HandleFunc("/events", l.hanleWebsocketConnection)
 
 		l.listenerWS = &http.Server{
-			Addr:         cfg.ListenWS,
 			Handler:      mux,
 			ReadTimeout:  l.timeout,
 			WriteTimeout: l.timeout,
 		}
 
+		wsLis, err := listen(cfg.ListenWS)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to Listen to Websocket HTTP: %s", err)
+		}
+
 		go func() {
-			if err := l.listenerWS.ListenAndServe(); err != nil {
+			if err := l.listenerWS.Serve(wsLis); err != nil {
 				if err == http.ErrServerClosed {
 					return
 				}
@@ -103,13 +107,8 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 	return l, nil
 }
 
-func listen(addr string) (*net.TCPListener, error) {
-	laddr, err := net.ResolveTCPAddr("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return net.ListenTCP("tcp", laddr)
+func listen(addr string) (net.Listener, error) {
+	return net.Listen(guessProto(addr), addr)
 }
 
 func (l *listener) statsTicker() {
@@ -138,7 +137,7 @@ func (l *listener) acceptTCP() {
 	defer l.wgAccept.Done()
 
 	for {
-		c, err := l.listenerTCP.AcceptTCP()
+		c, err := l.listener.Accept()
 		if err != nil {
 			select {
 			case <-l.shutdown:
@@ -327,8 +326,8 @@ func (l *listener) Close() {
 	l.Infof("Closing...")
 	close(l.shutdown)
 
-	if l.listenerTCP != nil {
-		l.listenerTCP.Close()
+	if l.listener != nil {
+		l.listener.Close()
 		l.Infof("TCP closed")
 	}
 

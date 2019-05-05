@@ -8,10 +8,11 @@ This is a service that receives a Riemann Protobuf-formatted event stream and se
 Although that can be done in Riemann itself, this service is simpler, probably faster and lightweight (no Java)
 
 ## Features
-* Receive event batches in Riemann Protobuf format (see *riemann.proto*) using TCP
+* Receive event batches in Riemann Protobuf format (see *riemann.proto*)
 * Receive events in Riemann JSON format using Websocket API
 * Convert Riemann events to Carbon metrics using flexible field mapping syntax
 * Send events in configurable batch sizes to any number of Riemann/Carbon targets
+* Supports TCP and Unix Sockets
 * Different target selection algorithms:
   - Round-Robin
   - Hash
@@ -23,7 +24,7 @@ Although that can be done in Riemann itself, this service is simpler, probably f
 * Configurable batch and buffer sizes, flush intervals, timeouts
 * Build RPM and DEB packages
 
-See *riemann-relay.toml* for more details on features and how to configure them
+See *riemann-relay.conf* for more details on features and how to configure them
 
 ## Performance
 On 2 average CPU cores it's able to handle about 500k events per second, depending on batch size and incoming Riemann message sizes.
@@ -74,7 +75,7 @@ Then just do one of:
 
 ## Run
 ```bash
-# /path/to/riemann-relay -config /etc/riemann-relay.toml
+# /path/to/riemann-relay -config /etc/riemann-relay.conf
 ```
 
 The logging currently goes to stdout.

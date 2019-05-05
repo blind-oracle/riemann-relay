@@ -37,7 +37,7 @@ func sendTestEvent(addr string) (err error) {
 
 func getTestListener(ch chan []*Event) (l *listener, err error) {
 	for port := 0; port < 50; port++ {
-		cfg.ListenTCP = "127.0.0.1:" + strconv.Itoa(rand.Intn(20000)+20000)
+		cfg.Listen = "127.0.0.1:" + strconv.Itoa(rand.Intn(20000)+20000)
 		if l, err = newListener(ch); err == nil {
 			return
 		}
@@ -54,7 +54,7 @@ func Test_listener(t *testing.T) {
 	l, err := getTestListener(ch)
 	assert.Nil(t, err)
 
-	err = sendTestEvent(cfg.ListenTCP)
+	err = sendTestEvent(cfg.Listen)
 	assert.Nil(t, err)
 
 	assert.Equal(t, "receivedBatches 1 receivedEvents 1 dropped 0", l.getStats())

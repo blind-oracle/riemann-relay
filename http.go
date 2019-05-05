@@ -10,9 +10,14 @@ import (
 )
 
 func initHTTP() {
+	httpLis, err := listen(cfg.ListenHTTP)
+	if err != nil {
+		log.Fatalf("Unable to listen to HTTP: %s", err)
+	}
+
 	http.HandleFunc("/stats", httpStats)
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(cfg.ListenHTTP, nil))
+	log.Fatal(http.Serve(httpLis, nil))
 }
 
 func httpStats(w http.ResponseWriter, r *http.Request) {
