@@ -1,13 +1,13 @@
 NAME := riemann-relay
-MAINTAINER:= "Igor Novgorodov <igor@novg.net>"
-DESCRIPTION := "Service for relaying RIemann events to Riemann/Carbon destinations"
-LICENSE := "MPLv2"
+MAINTAINER:= Igor Novgorodov <igor@novg.net>
+DESCRIPTION := Service for relaying Riemann events to Riemann/Carbon destinations
+LICENSE := MPLv2
 
 GO ?= go
 DEP ?= dep
 VERSION := $(shell cat VERSION)
 OUT := .out
-PACKAGE := "github.com/blind-oracle/$(NAME)"
+PACKAGE := github.com/blind-oracle/$(NAME)
 
 all: build
 

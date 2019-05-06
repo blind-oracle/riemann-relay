@@ -1,5 +1,5 @@
 [Unit]
-Description=Service for relaying RIemann events to Riemann/Carbon destinations
+Description=Service for relaying Riemann events to Riemann/Carbon destinations
 Documentation=https://github.com/blind-oracle/riemann-relay
 After=network.target
 
