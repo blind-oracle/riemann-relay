@@ -63,6 +63,7 @@ const (
 	riemannFieldDescription
 	riemannFieldTag
 	riemannFieldAttr
+	riemannFieldCustom
 )
 
 const (
@@ -92,6 +93,7 @@ var (
 		"description": riemannFieldDescription,
 		"tag":         riemannFieldTag,
 		"attr":        riemannFieldAttr,
+		"custom":      riemannFieldCustom,
 	}
 
 	riemannValueMap = map[string]riemannValue{
@@ -182,6 +184,8 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 			if attr = eventGetAttr(e, f.name); attr != nil {
 				b.WriteString(sep + attr.Value)
 			}
+		case riemannFieldCustom:
+			b.WriteString(sep + f.name)
 		}
 	}
 
