@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -66,12 +65,12 @@ func newInput(c *inputCfg) (i *input, err error) {
 	}
 
 	if c.Listen == "" && c.ListenWS == "" {
-		return nil, fmt.Errorf("At least one of listenTCP/listenWS should be specified")
+		return nil, fmt.Errorf("At least one of listen/listenWS should be specified")
 	}
 
 	if c.Listen != "" {
 		if i.listener, err = listen(c.Listen); err != nil {
-			return nil, fmt.Errorf("Unable to listen to '%s': %s", c.Listen, err)
+			return nil, fmt.Errorf("Unable to listen on '%s': %s", c.Listen, err)
 		}
 
 		i.wgAccept.Add(1)
@@ -259,9 +258,7 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 	)
 
 	sendWSError := func(msg string) error {
-		errMsg := &wsError{msg}
-		js, _ := json.Marshal(errMsg)
-		return c.WriteMessage(websocket.TextMessage, js)
+		return c.WriteJSON(wsError{msg})
 	}
 
 	for {
@@ -293,6 +290,9 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 		}
 
 		i.sendEvents([]*Event{ev})
+		if err = c.WriteMessage(websocket.TextMessage, []byte(`{}`)); err != nil {
+			return
+		}
 	}
 }
 
@@ -315,7 +315,7 @@ func (i *input) readTCPMessage(c net.Conn) (err error) {
 	if err = pb.Unmarshal(buf, msg); err != nil {
 		i.Errorf("Unable to unmarshal Protobuf message: %s", err)
 		// Don't disconnect just because of unmarshal error
-		// Try to send error message and wait for next event batch
+		// Try to send error message and wait for next message
 		return i.sendReply(false, "Unable to decode Protobuf message", c)
 	}
 
