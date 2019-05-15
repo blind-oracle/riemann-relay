@@ -54,10 +54,6 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 		logger:   &logger{"Listener"},
 	}
 
-	l.wsUpgrader = websocket.Upgrader{
-		HandshakeTimeout: l.timeout,
-	}
-
 	if cfg.Listen == "" && cfg.ListenWS == "" {
 		return nil, fmt.Errorf("At least one of listenTCP/listenWS should be specified")
 	}
@@ -73,6 +69,10 @@ func newListener(chanOut chan []*Event) (l *listener, err error) {
 	}
 
 	if cfg.ListenWS != "" {
+		l.wsUpgrader = websocket.Upgrader{
+			HandshakeTimeout: l.timeout,
+		}
+
 		mux := http.NewServeMux()
 		mux.HandleFunc("/events", l.hanleWebsocketConnection)
 
