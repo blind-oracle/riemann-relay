@@ -21,13 +21,19 @@ func initHTTP() {
 }
 
 func httpStats(w http.ResponseWriter, r *http.Request) {
-	stats := fmt.Sprintf("Listener: %s\n", lis.getStats())
+	var out string
 
-	for _, o := range outputs {
-		for _, r := range strings.Split(strings.TrimSpace(o.getStats()), "\n") {
-			stats += fmt.Sprintf("Output %s: %s\n", o.name, r)
+	for _, i := range inputs {
+		for _, r := range strings.Split(strings.TrimSpace(i.getStats()), "\n") {
+			out += fmt.Sprintf("Input %s: %s\n", i.name, r)
 		}
 	}
 
-	fmt.Fprint(w, stats)
+	for _, o := range outputs {
+		for _, r := range strings.Split(strings.TrimSpace(o.getStats()), "\n") {
+			out += fmt.Sprintf("Output %s: %s\n", o.name, r)
+		}
+	}
+
+	fmt.Fprint(w, out)
 }

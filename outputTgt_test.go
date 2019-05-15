@@ -31,10 +31,11 @@ func Test_outputRiemann(t *testing.T) {
 	cfg.StatsInterval.Duration = 50 * time.Millisecond
 
 	ch := make(chan []*Event, 10)
-	l, err := getTestListener(ch)
+	i, cf, err := getTestInput()
 	assert.Nil(t, err)
+	i.addChannel("test", ch)
 
-	testCfg.Targets = []string{cfg.Listen}
+	testCfg.Targets = []string{cf.Listen}
 	test := func(algo string) {
 		testCfg.Algo = algo
 		o, err := newOutput(testCfg)
@@ -65,7 +66,7 @@ func Test_outputRiemann(t *testing.T) {
 		test(a)
 	}
 
-	l.Close()
+	i.Close()
 }
 
 func Test_outputCarbon(t *testing.T) {

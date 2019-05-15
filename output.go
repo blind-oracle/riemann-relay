@@ -66,7 +66,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		tgtCnt: uint64(len(c.Targets)),
 		chanIn: make(chan []*Event),
 		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
-		logger: &logger{c.Name},
+		logger: &logger{fmt.Sprintf("Output %s", c.Name)},
 	}
 
 	switch algo {
@@ -124,6 +124,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		go o.statsTicker()
 	}
 
+	o.Infof("Running")
 	return o, nil
 }
 

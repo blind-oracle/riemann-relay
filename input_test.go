@@ -35,10 +35,14 @@ func sendTestEvent(addr string) (err error) {
 	return
 }
 
-func getTestListener(ch chan []*Event) (l *listener, err error) {
+func getTestInput() (i *input, c *inputCfg, err error) {
+	c = &inputCfg{
+		Name: "test",
+	}
+
 	for port := 0; port < 50; port++ {
-		cfg.Listen = "127.0.0.1:" + strconv.Itoa(rand.Intn(20000)+20000)
-		if l, err = newListener(ch); err == nil {
+		c.Listen = "127.0.0.1:" + strconv.Itoa(rand.Intn(20000)+20000)
+		if i, err = newInput(c); err == nil {
 			return
 		}
 	}
@@ -46,19 +50,18 @@ func getTestListener(ch chan []*Event) (l *listener, err error) {
 	return
 }
 
-func Test_listener(t *testing.T) {
-	var (
-		ch = make(chan []*Event, 10)
-	)
+func Test_Input(t *testing.T) {
+	ch := make(chan []*Event, 10)
 
-	l, err := getTestListener(ch)
+	i, cf, err := getTestInput()
+	assert.Nil(t, err)
+	i.addChannel("test", ch)
+
+	err = sendTestEvent(cf.Listen)
 	assert.Nil(t, err)
 
-	err = sendTestEvent(cfg.Listen)
-	assert.Nil(t, err)
-
-	assert.Equal(t, "receivedBatches 1 receivedEvents 1 dropped 0", l.getStats())
-	l.Close()
+	assert.Equal(t, "receivedBatches 1 receivedEvents 1 dropped 0", i.getStats())
+	i.Close()
 
 	evT := &Event{
 		Service:     "foo",

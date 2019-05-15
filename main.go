@@ -5,25 +5,21 @@ import (
 	"flag"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	lis     *listener
-	outputs []*output
+	inputs  = map[string]*input{}
+	outputs = map[string]*output{}
 )
 
 func main() {
-	var (
-		wg  sync.WaitGroup
-		err error
-	)
+	var err error
 
 	l := &logger{"Main"}
-	chanClose, chanDrain := make(chan struct{}), make(chan struct{})
+	chanClose := make(chan struct{})
 
 	configFile := flag.String("config", "/etc/riemann-relay/riemann-relay.conf", "Path to a config file")
 	debug := flag.Bool("debug", false, "Enable debug logging (use with care - a LOT of output)")
@@ -39,65 +35,45 @@ func main() {
 	}
 	l.Infof("Configuration loaded")
 
-	// Buffer for event batches coming from listener
-	chanInput := make(chan []*Event, cfg.BufferSize)
-
-	// Fire up listener
-	if lis, err = newListener(chanInput); err != nil {
-		l.Fatalf("Unable to set up listener: %s", err)
-	}
-
 	// Fire up outputs
-	for _, ocfg := range cfg.Outputs {
-		o, err := newOutput(ocfg)
+	for _, c := range cfg.Outputs {
+		o, err := newOutput(c)
 		if err != nil {
-			l.Fatalf("Unable to init output '%s': %s", ocfg.Name, err)
+			l.Fatalf("Unable to init output '%s': %s", c.Name, err)
 		}
 
-		outputs = append(outputs, o)
+		outputs[c.Name] = o
+	}
+	l.Infof("Outputs started: %d", len(outputs))
+
+	// Fire up inputs
+	unusedOutputs := map[string]bool{}
+	for on := range outputs {
+		unusedOutputs[on] = true
 	}
 
-	pushBatch := func(batch []*Event) {
-		for _, o := range outputs {
-			o.chanIn <- batch
+	for _, c := range cfg.Inputs {
+		i, err := newInput(c)
+		if err != nil {
+			l.Fatalf("Unable to init input '%s': %s", c.Name, err)
 		}
-	}
 
-	wg.Add(1)
-	// Fire up event dispatcher
-	go func() {
-		defer wg.Done()
-		var (
-			batch []*Event
-			ok    bool
-		)
-
-		for {
-			select {
-			case <-chanDrain:
-				l.Infof("Draining input buffer...")
-
-				c := 0
-				for {
-					batch, ok = <-chanInput
-					if !ok {
-						l.Infof("Input buffer drained (%d batches)", c)
-						return
-					}
-
-					pushBatch(batch)
-					c++
-				}
-
-			case batch, ok = <-chanInput:
-				if !ok {
-					continue
-				}
-
-				pushBatch(batch)
+		for _, on := range c.Outputs {
+			if o, ok := outputs[on]; !ok {
+				l.Fatalf("Input %s: output '%s' not defined", c.Name, on)
+			} else {
+				i.addChannel(on, o.chanIn)
+				delete(unusedOutputs, on)
 			}
 		}
-	}()
+
+		inputs[c.Name] = i
+	}
+	l.Infof("Inputs started: %d", len(inputs))
+
+	if len(unusedOutputs) > 0 {
+		l.Fatalf("Unused outputs in a config file: %+v", unusedOutputs)
+	}
 
 	l.Infof("HTTP listening to %s", cfg.ListenHTTP)
 	go initHTTP()
@@ -120,11 +96,10 @@ func main() {
 	// Wait for shutdown
 	<-chanClose
 
-	// Close listener first and wait for all events to drain to outputs
-	lis.Close()
-	close(chanInput)
-	close(chanDrain)
-	wg.Wait()
+	// Close inputs
+	for _, i := range inputs {
+		i.Close()
+	}
 
 	// Drain & close outputs
 	for _, o := range outputs {

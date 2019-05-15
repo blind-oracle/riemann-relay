@@ -18,6 +18,15 @@ func (d *duration) UnmarshalText(text []byte) error {
 	return err
 }
 
+type inputCfg struct {
+	Name     string
+	Listen   string
+	ListenWS string
+	Timeout  duration
+
+	Outputs []string
+}
+
 type outputCfg struct {
 	Name string
 	Type string
@@ -38,24 +47,19 @@ type outputCfg struct {
 }
 
 type config struct {
-	Listen     string
-	ListenWS   string
 	ListenHTTP string
 
-	Timeout       duration
 	StatsInterval duration `toml:"stats_interval"`
+	BufferSize    int      `toml:"buffer_size"`
 
-	BufferSize int                   `toml:"buffer_size"`
-	Outputs    map[string]*outputCfg `toml:"output"`
+	Inputs  map[string]*inputCfg  `toml:"input"`
+	Outputs map[string]*outputCfg `toml:"output"`
 }
 
 func defaultConfig() config {
 	return config{
-		Listen:        "127.0.0.1:12345",
-		ListenWS:      "127.0.0.1:12346",
 		ListenHTTP:    "127.0.0.1:12347",
 		StatsInterval: duration{60 * time.Second},
-		Timeout:       duration{30 * time.Second},
 		BufferSize:    50000,
 
 		Outputs: map[string]*outputCfg{},
@@ -69,11 +73,18 @@ func configLoad(file string) error {
 		return fmt.Errorf("Unable to load config: %s", err)
 	}
 
+	if len(cfg.Inputs) == 0 {
+		return fmt.Errorf("No inputs defined")
+	}
+
 	if len(cfg.Outputs) == 0 {
 		return fmt.Errorf("No outputs defined")
 	}
 
+	outputs := map[string]bool{}
 	for n, o := range cfg.Outputs {
+		outputs[n] = true
+
 		o.Name = n
 
 		if o.ConnectTimeout.Duration == 0 {
@@ -111,6 +122,18 @@ func configLoad(file string) error {
 			if _, err := net.ResolveTCPAddr("tcp", t); err != nil {
 				return fmt.Errorf("Output %s: %s: Bad TCP address specified: %s", n, t, err)
 			}
+		}
+	}
+
+	for n, i := range cfg.Inputs {
+		i.Name = n
+
+		if i.Timeout.Duration == 0 {
+			i.Timeout.Duration = 5 * time.Second
+		}
+
+		if len(i.Outputs) == 0 {
+			return fmt.Errorf("Input %s: No outputs defined", n)
 		}
 	}
 
