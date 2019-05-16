@@ -78,6 +78,8 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		o.getTargets = o.getTargetsHash
 	case outputAlgoBroadcast:
 		o.getTargets = o.getTargetsBroadcast
+	default:
+		return nil, fmt.Errorf("Unknown algo: %s", algo)
 	}
 
 	o.Infof("Starting output (type '%s', algo '%s')", typ, algo)
@@ -88,7 +90,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		}
 
 		if len(o.hashFields) == 0 {
-			return nil, fmt.Errorf("You need to specify hash_fields")
+			return nil, fmt.Errorf("You need to specify 'hash_fields'")
 		}
 
 		o.Infof("Hash fields: %v", o.hashFields)
@@ -100,11 +102,11 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		}
 
 		if len(o.carbonFields) == 0 {
-			return nil, fmt.Errorf("You need to specify carbon_fields for output type 'carbon'")
+			return nil, fmt.Errorf("You need to specify 'carbon_fields' for output type 'carbon'")
 		}
 
 		if o.carbonValue, ok = riemannValueMap[c.CarbonValue]; !ok {
-			return nil, fmt.Errorf("Unknown Carbon value '%s'", c.CarbonValue)
+			return nil, fmt.Errorf("Unknown 'carbon_value': %s", c.CarbonValue)
 		}
 
 		o.Infof("Carbon fields: %v, value: %s", o.carbonFields, o.carbonValue)

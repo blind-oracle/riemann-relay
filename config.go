@@ -22,7 +22,9 @@ type inputCfg struct {
 	Name     string
 	Listen   string
 	ListenWS string
-	Timeout  duration
+
+	TimeoutRead  duration `toml:"timeout_read"`
+	TimeoutWrite duration `toml:"timeout_write"`
 
 	Outputs []string
 }
@@ -39,8 +41,9 @@ type outputCfg struct {
 
 	Targets           []string
 	ReconnectInterval duration `toml:"reconnect_interval"`
-	ConnectTimeout    duration `toml:"connect_timeout"`
-	Timeout           duration
+	TimeoutConnect    duration `toml:"timeout_connect"`
+	TimeoutRead       duration `toml:"timeout_read"`
+	TimeoutWrite      duration `toml:"timeout_write"`
 	BufferSize        int      `toml:"buffer_size"`
 	BatchSize         int      `toml:"batch_size"`
 	BatchTimeout      duration `toml:"batch_timeout"`
@@ -87,12 +90,16 @@ func configLoad(file string) error {
 
 		o.Name = n
 
-		if o.ConnectTimeout.Duration == 0 {
-			o.ConnectTimeout.Duration = 5 * time.Second
+		if o.TimeoutConnect.Duration == 0 {
+			o.TimeoutConnect.Duration = 5 * time.Second
 		}
 
-		if o.Timeout.Duration == 0 {
-			o.Timeout.Duration = 5 * time.Second
+		if o.TimeoutRead.Duration == 0 {
+			o.TimeoutRead.Duration = 5 * time.Second
+		}
+
+		if o.TimeoutWrite.Duration == 0 {
+			o.TimeoutWrite.Duration = 5 * time.Second
 		}
 
 		if o.ReconnectInterval.Duration == 0 {
@@ -128,8 +135,12 @@ func configLoad(file string) error {
 	for n, i := range cfg.Inputs {
 		i.Name = n
 
-		if i.Timeout.Duration == 0 {
-			i.Timeout.Duration = 5 * time.Second
+		if i.TimeoutRead.Duration == 0 {
+			i.TimeoutRead.Duration = 5 * time.Second
+		}
+
+		if i.TimeoutWrite.Duration == 0 {
+			i.TimeoutWrite.Duration = 5 * time.Second
 		}
 
 		if len(i.Outputs) == 0 {

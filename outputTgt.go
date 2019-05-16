@@ -21,8 +21,9 @@ type target struct {
 	conn net.Conn
 
 	reconnectInterval time.Duration
-	connTimeout       time.Duration
-	timeout           time.Duration
+	timeoutConnect    time.Duration
+	timeoutRead       time.Duration
+	timeoutWrite      time.Duration
 
 	batch struct {
 		buf     []*Event
@@ -66,8 +67,8 @@ func newOutputTgt(h string, c *outputCfg, o *output) *target {
 		host:              h,
 		typ:               o.typ,
 		reconnectInterval: c.ReconnectInterval.Duration,
-		connTimeout:       c.ConnectTimeout.Duration,
-		timeout:           c.Timeout.Duration,
+		timeoutConnect:    c.TimeoutConnect.Duration,
+		timeoutWrite:      c.TimeoutWrite.Duration,
 		o:                 o,
 
 		chanDispatchClose: make(chan struct{}),
@@ -81,6 +82,8 @@ func newOutputTgt(h string, c *outputCfg, o *output) *target {
 	case outputTypeCarbon:
 		t.writeBatch = t.writeBatchCarbon
 	case outputTypeRiemann:
+		// Riemann does reply so we use read timeout
+		t.timeoutRead = c.TimeoutRead.Duration
 		t.writeBatch = t.writeBatchRiemann
 	}
 
@@ -131,7 +134,7 @@ loop:
 				continue loop
 			}
 
-			t.conn = newTimeoutConn(c, 0, t.timeout)
+			t.conn = newTimeoutConn(c, t.timeoutRead, t.timeoutWrite)
 
 			if t.typ == outputTypeCarbon {
 				t.wg.Add(1)
@@ -237,7 +240,8 @@ func (t *target) Close() {
 
 func (t *target) connect() (c net.Conn, err error) {
 	dialer := &net.Dialer{
-		Timeout: t.connTimeout,
+		Timeout:   t.timeoutConnect,
+		KeepAlive: 30 * time.Second,
 	}
 
 	return dialer.DialContext(t.ctx, guessProto(t.host), t.host)

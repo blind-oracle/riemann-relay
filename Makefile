@@ -20,7 +20,7 @@ gox-build:
 	mkdir -p $(OUT)
 	gox -os="linux" -arch="amd64" -output="$(OUT)/$(NAME)-{{.OS}}-{{.Arch}}" $(PACKAGE)
 	mkdir -p $(OUT)/root/etc/$(NAME)
-	cp riemann-relay.toml $(OUT)/root/etc/$(NAME)/$(NAME).conf
+	cp riemann-relay.conf $(OUT)/root/etc/$(NAME)/$(NAME).conf
 
 deb:
 	make gox-build
@@ -37,9 +37,9 @@ build-deb:
 		--force \
 		--deb-compression bzip2 \
 		--url https://$(PACKAGE) \
-		--description $(DESCRIPTION) \
-		-m $(MAINTAINER) \
-		--license $(LICENSE) \
+		--description "$(DESCRIPTION)" \
+		-m "$(MAINTAINER)" \
+		--license "$(LICENSE)" \
 		-a $(ARCH) \
 		$(OUT)/$(NAME)-linux-$(ARCH)=/usr/bin/$(NAME) \
 		deploy/$(NAME).service=/usr/lib/systemd/system/$(NAME).service \
@@ -51,9 +51,9 @@ build-rpm:
 		--rpm-compression bzip2 \
 		--rpm-os linux \
 		--url https://$(PACKAGE) \
-		--description $(DESCRIPTION) \
-		-m $(MAINTAINER) \
-		--license $(LICENSE) \
+		--description "$(DESCRIPTION)" \
+		-m "$(MAINTAINER)" \
+		--license "$(LICENSE)" \
 		-a $(ARCH) \
 		--config-files /etc/$(NAME)/$(NAME).conf \
 		$(OUT)/$(NAME)-linux-$(ARCH)=/usr/bin/$(NAME) \

@@ -35,7 +35,8 @@ type input struct {
 	listenerWS *http.Server
 	wsUpgrader websocket.Upgrader
 
-	timeout time.Duration
+	timeoutRead  time.Duration
+	timeoutWrite time.Duration
 
 	chansOut map[string]chan []*Event
 	shutdown chan struct{}
@@ -56,16 +57,17 @@ type input struct {
 
 func newInput(c *inputCfg) (i *input, err error) {
 	i = &input{
-		name:     c.Name,
-		chansOut: map[string]chan []*Event{},
-		timeout:  c.Timeout.Duration,
-		shutdown: make(chan struct{}),
-		conns:    map[string]net.Conn{},
-		logger:   &logger{fmt.Sprintf("Input %s", c.Name)},
+		name:         c.Name,
+		chansOut:     map[string]chan []*Event{},
+		timeoutRead:  c.TimeoutRead.Duration,
+		timeoutWrite: c.TimeoutWrite.Duration,
+		shutdown:     make(chan struct{}),
+		conns:        map[string]net.Conn{},
+		logger:       &logger{fmt.Sprintf("Input %s", c.Name)},
 	}
 
 	if c.Listen == "" && c.ListenWS == "" {
-		return nil, fmt.Errorf("At least one of listen/listenWS should be specified")
+		return nil, fmt.Errorf("At least one of listen/listen_ws should be specified")
 	}
 
 	if c.Listen != "" {
@@ -80,7 +82,7 @@ func newInput(c *inputCfg) (i *input, err error) {
 
 	if c.ListenWS != "" {
 		i.wsUpgrader = websocket.Upgrader{
-			HandshakeTimeout: i.timeout,
+			HandshakeTimeout: i.timeoutRead,
 		}
 
 		mux := http.NewServeMux()
@@ -88,8 +90,8 @@ func newInput(c *inputCfg) (i *input, err error) {
 
 		i.listenerWS = &http.Server{
 			Handler:      mux,
-			ReadTimeout:  i.timeout,
-			WriteTimeout: i.timeout,
+			ReadTimeout:  i.timeoutRead,
+			WriteTimeout: i.timeoutWrite,
 		}
 
 		wsLis, err := listen(c.ListenWS)
@@ -181,7 +183,7 @@ func (i *input) acceptTCP() {
 		i.conns[id] = c
 		i.Unlock()
 
-		go i.handleTCPConnection(newTimeoutConn(c, i.timeout, i.timeout))
+		go i.handleTCPConnection(newTimeoutConn(c, i.timeoutRead, i.timeoutWrite))
 	}
 }
 
