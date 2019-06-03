@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"sync"
@@ -86,7 +87,7 @@ func newInput(c *inputCfg) (i *input, err error) {
 		}
 
 		mux := http.NewServeMux()
-		mux.HandleFunc("/events", i.hanleWebsocketConnection)
+		mux.HandleFunc("/events", i.handleHTTPRequest)
 
 		i.listenerWS = &http.Server{
 			Handler:      mux,
@@ -240,13 +241,28 @@ func (i *input) sendReply(ok bool, reason string, c net.Conn) error {
 	return nil
 }
 
-func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request) {
-	i.Infof("%s: Websocket connection", r.RemoteAddr)
+func (i *input) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
+	i.Infof("%s: HTTP request (%s)", r.RemoteAddr, r.Method)
 
+	switch r.Method {
+	case http.MethodPut, http.MethodPost:
+		i.handleHTTPEvent(w, r)
+	case http.MethodGet:
+		i.hanleWebsocketConnection(w, r)
+	default:
+		fmt.Fprintf(w, "Method '%s' not supported", r.Method)
+		w.WriteHeader(400)
+	}
+}
+
+func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request) {
+	i.Infof("%s: Trying Websocket upgrade", r.RemoteAddr)
 	c, err := i.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		i.Errorf("%s: Websocket upgrade failed: %s", r.RemoteAddr, err)
+		return
 	}
+	i.Infof("%s: Websocket upgrade successful", r.RemoteAddr)
 
 	defer func() {
 		i.Infof("%s: Websocket connection closed", r.RemoteAddr)
@@ -296,6 +312,23 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+}
+
+func (i *input) handleHTTPEvent(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	buf, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		i.Errorf("%s: Unable to read request body", r.RemoteAddr, err)
+		return
+	}
+
+	ev, err := eventFromJSON(buf)
+	if err != nil {
+		i.Errorf("%s: Unable to parse event JSON: %s", r.RemoteAddr, err)
+	}
+
+	i.sendEvents([]*Event{ev})
 }
 
 func (i *input) readTCPMessage(c net.Conn) (err error) {
