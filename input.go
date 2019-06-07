@@ -88,6 +88,7 @@ func newInput(c *inputCfg) (i *input, err error) {
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/events", i.handleHTTPRequest)
+		mux.HandleFunc("/events/", i.handleHTTPRequest)
 
 		i.listenerWS = &http.Server{
 			Handler:      mux,
@@ -326,6 +327,7 @@ func (i *input) handleHTTPEvent(w http.ResponseWriter, r *http.Request) {
 	ev, err := eventFromJSON(buf)
 	if err != nil {
 		i.Errorf("%s: Unable to parse event JSON: %s", r.RemoteAddr, err)
+		return
 	}
 
 	i.sendEvents([]*Event{ev})
