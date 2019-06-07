@@ -189,6 +189,10 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 		}
 	}
 
+	if b.Len() == 0 {
+		return []byte{}
+	}
+
 	// Skip first dot
 	return b.Bytes()[1:]
 }
