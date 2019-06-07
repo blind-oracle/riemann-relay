@@ -64,7 +64,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		algoFailover: c.AlgoFailover,
 
 		tgtCnt: uint64(len(c.Targets)),
-		chanIn: make(chan []*Event),
+		chanIn: make(chan []*Event, cfg.BufferSize),
 		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		logger: &logger{fmt.Sprintf("Output %s", c.Name)},
 	}
