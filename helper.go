@@ -169,20 +169,20 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 	for _, f := range hf {
 		switch f.f {
 		case riemannFieldState:
-			b.WriteString(sep + e.State)
+			b.WriteString(sep + e.GetState())
 		case riemannFieldService:
-			b.WriteString(sep + e.Service)
+			b.WriteString(sep + e.GetService())
 		case riemannFieldHost:
-			b.WriteString(sep + e.Host)
+			b.WriteString(sep + e.GetHost())
 		case riemannFieldDescription:
-			b.WriteString(sep + e.Description)
+			b.WriteString(sep + e.GetDescription())
 		case riemannFieldTag:
 			if eventHasTag(e, f.name) {
 				b.WriteString(sep + f.name)
 			}
 		case riemannFieldAttr:
 			if attr = eventGetAttr(e, f.name); attr != nil {
-				b.WriteString(sep + attr.Value)
+				b.WriteString(sep + attr.GetValue())
 			}
 		case riemannFieldCustom:
 			b.WriteString(sep + f.name)
@@ -200,18 +200,18 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 func eventGetValue(e *Event, v riemannValue) (o float64) {
 	switch v {
 	case riemannValueInt:
-		o = float64(e.MetricSint64)
+		o = float64(e.GetMetricSint64())
 	case riemannValueFloat:
-		o = float64(e.MetricF)
+		o = float64(e.GetMetricF())
 	case riemannValueDouble:
-		o = e.MetricD
+		o = e.GetMetricD()
 	case riemannValueAny:
-		if e.MetricD > 0 {
-			o = e.MetricD
-		} else if e.MetricSint64 > 0 {
-			o = float64(e.MetricSint64)
+		if e.GetMetricD() > 0 {
+			o = e.GetMetricD()
+		} else if e.GetMetricSint64() > 0 {
+			o = float64(e.GetMetricSint64())
 		} else {
-			o = float64(e.MetricF)
+			o = float64(e.GetMetricF())
 		}
 	}
 
@@ -220,7 +220,7 @@ func eventGetValue(e *Event, v riemannValue) (o float64) {
 
 func eventGetAttr(e *Event, name string) *Attribute {
 	for _, a := range e.Attributes {
-		if a.Key == name {
+		if a.GetKey() == name {
 			return a
 		}
 	}
@@ -267,10 +267,10 @@ func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 	b.WriteByte(' ')
 
 	var t int64
-	if e.TimeMicros > 0 {
-		t = e.TimeMicros / 1000000
+	if e.GetTimeMicros() > 0 {
+		t = e.GetTimeMicros() / 1000000
 	} else {
-		t = e.Time
+		t = e.GetTime()
 	}
 
 	b.WriteString(strconv.FormatInt(t, 10))

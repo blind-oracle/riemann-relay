@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"time"
+
+	pb "github.com/golang/protobuf/proto"
 )
 
 type attributeJSON struct {
@@ -29,25 +31,25 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 	}
 
 	ev = &Event{
-		Host:        evJS.Host,
-		Service:     evJS.Service,
-		State:       evJS.State,
-		Description: evJS.Description,
-		MetricD:     evJS.Metric,
+		Host:        pb.String(evJS.Host),
+		Service:     pb.String(evJS.Service),
+		State:       pb.String(evJS.State),
+		Description: pb.String(evJS.Description),
+		MetricD:     pb.Float64(evJS.Metric),
 		Tags:        evJS.Tags,
-		Ttl:         evJS.TTL,
+		Ttl:         pb.Float32(evJS.TTL),
 	}
 
 	if !evJS.Time.IsZero() {
-		ev.TimeMicros = evJS.Time.UnixNano() / 1000
+		ev.TimeMicros = pb.Int64(evJS.Time.UnixNano() / 1000)
 	} else {
-		ev.TimeMicros = time.Now().UnixNano() / 1000
+		ev.TimeMicros = pb.Int64(time.Now().UnixNano() / 1000)
 	}
 
 	for _, attr := range evJS.Attributes {
 		ev.Attributes = append(ev.Attributes, &Attribute{
-			Key:   attr.Key,
-			Value: attr.Value,
+			Key:   pb.String(attr.Key),
+			Value: pb.String(attr.Value),
 		})
 	}
 

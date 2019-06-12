@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/golang/protobuf/proto"
 	riemanngo "github.com/riemann/riemann-go-client"
 	"github.com/stretchr/testify/assert"
 )
@@ -64,9 +65,9 @@ func Test_Input(t *testing.T) {
 	i.Close()
 
 	evT := &Event{
-		Service:     "foo",
-		Host:        "bar",
-		Description: "baz",
+		Service:     pb.String("foo"),
+		Host:        pb.String("bar"),
+		Description: pb.String("baz"),
 	}
 
 	batch, ok := <-ch

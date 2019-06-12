@@ -4,23 +4,24 @@ import (
 	"bytes"
 	"testing"
 
+	pb "github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
 	testEvent = &Event{
-		State:       "foo",
-		Service:     "bar",
-		Host:        "baz",
-		Description: "fooz",
+		State:       pb.String("foo"),
+		Service:     pb.String("bar"),
+		Host:        pb.String("baz"),
+		Description: pb.String("fooz"),
 		Tags:        []string{"a", "b", "c"},
 		Attributes: []*Attribute{
-			{Key: "key1", Value: "val1"},
-			{Key: "key2", Value: "val2"},
+			{Key: pb.String("key1"), Value: pb.String("val1")},
+			{Key: pb.String("key2"), Value: pb.String("val2")},
 		},
-		Time:         1234567,
-		TimeMicros:   1234567000000,
-		MetricSint64: 9876,
+		Time:         pb.Int64(1234567),
+		TimeMicros:   pb.Int64(1234567000000),
+		MetricSint64: pb.Int64(9876),
 	}
 
 	testRfn = []riemannFieldName{
@@ -107,7 +108,7 @@ func Benchmark_eventCompileFields(b *testing.B) {
 }
 
 func Test_eventGetAttr(t *testing.T) {
-	assert.Equal(t, "val1", eventGetAttr(testEvent, "key1").Value)
+	assert.Equal(t, "val1", eventGetAttr(testEvent, "key1").GetValue())
 	assert.Nil(t, eventGetAttr(testEvent, "foo"))
 }
 

@@ -222,8 +222,8 @@ func (i *input) handleTCPConnection(c net.Conn) {
 
 func (i *input) sendReply(ok bool, reason string, c net.Conn) error {
 	msg := &Msg{
-		Ok:    ok,
-		Error: reason,
+		Ok:    pb.Bool(ok),
+		Error: pb.String(reason),
 	}
 
 	buf, err := pb.Marshal(msg)
@@ -362,8 +362,8 @@ func (i *input) readTCPMessage(c net.Conn) (err error) {
 
 func (i *input) sendEvents(events []*Event) {
 	for _, ev := range events {
-		if ev.TimeMicros == 0 && ev.Time == 0 {
-			ev.TimeMicros = time.Now().UnixNano() / 1000
+		if ev.GetTimeMicros() == 0 && ev.GetTime() == 0 {
+			ev.TimeMicros = pb.Int64(time.Now().UnixNano() / 1000)
 		}
 	}
 

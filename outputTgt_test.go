@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,9 +42,9 @@ func Test_outputRiemann(t *testing.T) {
 		assert.Nil(t, err)
 
 		evT := &Event{
-			Service:     "foo",
-			Host:        "bar",
-			Description: "baz",
+			Service:     pb.String("foo"),
+			Host:        pb.String("bar"),
+			Description: pb.String("baz"),
 		}
 
 		time.Sleep(100 * time.Millisecond)
@@ -105,11 +106,11 @@ func Test_outputCarbon(t *testing.T) {
 	assert.Nil(t, err)
 
 	evT := &Event{
-		Service:      "foo",
-		Host:         "bar",
-		Description:  "baz",
-		MetricSint64: 123,
-		Time:         12345,
+		Service:      pb.String("foo"),
+		Host:         pb.String("bar"),
+		Description:  pb.String("baz"),
+		MetricSint64: pb.Int64(123),
+		Time:         pb.Int64(12345),
 	}
 
 	time.Sleep(100 * time.Millisecond)

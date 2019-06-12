@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	pb "github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,19 +29,20 @@ const (
 
 func Test_eventFromJSON(t *testing.T) {
 	ev := &Event{
-		Host:        "blah",
-		Service:     "foo",
-		Description: "baz",
-		State:       "ok",
+		Host:        pb.String("blah"),
+		Service:     pb.String("foo"),
+		Description: pb.String("baz"),
+		State:       pb.String("ok"),
 		Tags:        []string{"tag1", "tag2"},
 		Attributes: []*Attribute{
 			{
-				Key:   "key1",
-				Value: "val1",
+				Key:   pb.String("key1"),
+				Value: pb.String("val1"),
 			},
 		},
-		TimeMicros: 1523367364787000,
-		MetricD:    123,
+		Ttl:        pb.Float32(0),
+		TimeMicros: pb.Int64(1523367364787000),
+		MetricD:    pb.Float64(123),
 	}
 
 	ev2, err := eventFromJSON([]byte(jsTest))

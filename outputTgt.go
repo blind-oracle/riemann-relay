@@ -349,7 +349,7 @@ func (t *target) writeBatchRiemann(batch []*Event) (err error) {
 		return fmt.Errorf("Unable to unmarshal Protobuf reply: %s", err)
 	}
 
-	if !msg.Ok {
+	if !msg.GetOk() {
 		return fmt.Errorf("Non-OK reply from Riemann")
 	}
 
