@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 
@@ -51,6 +52,24 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 			Key:   pb.String(attr.Key),
 			Value: pb.String(attr.Value),
 		})
+	}
+
+	return
+}
+
+func eventsFromMultipleJSONs(msg []byte) (evs []*Event, err error) {
+	for _, p := range bytes.Split(msg, []byte("\n")) {
+		p = bytes.TrimSpace(p)
+		if len(p) == 0 {
+			continue
+		}
+
+		ev, err := eventFromJSON(p)
+		if err != nil {
+			return nil, err
+		}
+
+		evs = append(evs, ev)
 	}
 
 	return

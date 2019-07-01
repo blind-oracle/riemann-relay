@@ -324,13 +324,13 @@ func (i *input) handleHTTPEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ev, err := eventFromJSON(buf)
+	evs, err := eventsFromMultipleJSONs(buf)
 	if err != nil {
 		i.Errorf("%s: Unable to parse event JSON: %s", r.RemoteAddr, err)
 		return
 	}
 
-	i.sendEvents([]*Event{ev})
+	i.sendEvents(evs)
 }
 
 func (i *input) readTCPMessage(c net.Conn) (err error) {
