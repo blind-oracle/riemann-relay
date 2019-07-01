@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	pb "github.com/golang/protobuf/proto"
@@ -25,6 +27,20 @@ type eventJSON struct {
 	TTL         float32
 }
 
+var (
+	eventJSONFields = map[string]bool{
+		"host":        true,
+		"service":     true,
+		"state":       true,
+		"description": true,
+		"time":        true,
+		"metric":      true,
+		"tags":        true,
+		"attributes":  true,
+		"ttl":         true,
+	}
+)
+
 func eventFromJSON(msg []byte) (ev *Event, err error) {
 	evJS := &eventJSON{}
 	if err = json.Unmarshal(msg, evJS); err != nil {
@@ -41,10 +57,31 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 		Ttl:         pb.Float32(evJS.TTL),
 	}
 
+	var tm time.Time
 	if !evJS.Time.IsZero() {
-		ev.TimeMicros = pb.Int64(evJS.Time.UnixNano() / 1000)
+		tm = evJS.Time
 	} else {
-		ev.TimeMicros = pb.Int64(time.Now().UnixNano() / 1000)
+		tm = time.Now()
+	}
+
+	ev.TimeMicros = pb.Int64(tm.UnixNano() / 1000)
+
+	// Unmarshal again to a map
+	m := map[string]interface{}{}
+	if err = json.Unmarshal(msg, &m); err != nil {
+		return
+	}
+
+	// Put any non-standard fields into attributes
+	for k, v := range m {
+		klc := strings.ToLower(k)
+
+		if !eventJSONFields[klc] {
+			ev.Attributes = append(ev.Attributes, &Attribute{
+				Key:   pb.String(klc),
+				Value: pb.String(fmt.Sprintf("%v", v)),
+			})
+		}
 	}
 
 	for _, attr := range evJS.Attributes {

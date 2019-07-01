@@ -327,9 +327,11 @@ func (i *input) handleHTTPEvent(w http.ResponseWriter, r *http.Request) {
 	evs, err := eventsFromMultipleJSONs(buf)
 	if err != nil {
 		i.Errorf("%s: Unable to parse event JSON: %s", r.RemoteAddr, err)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 
+	i.Infof("%s: %d events parsed", r.RemoteAddr, len(evs))
 	i.sendEvents(evs)
 }
 
