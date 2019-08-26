@@ -22,18 +22,23 @@ func main() {
 	chanClose := make(chan struct{})
 
 	configFile := flag.String("config", "/etc/riemann-relay/riemann-relay.conf", "Path to a config file")
-	debug := flag.Bool("debug", false, "Enable debug logging (use with care - a LOT of output)")
 	flag.Parse()
-
-	if *debug {
-		log.SetLevel(log.DebugLevel)
-		l.Infof("Debugging enabled")
-	}
 
 	if err = configLoad(*configFile); err != nil {
 		l.Fatalf("Unable to load config file: %s", err)
 	}
 	l.Infof("Configuration loaded")
+
+	if cfg.LogLevel != "" {
+		lvl, err := log.ParseLevel(cfg.LogLevel)
+		if err != nil {
+			log.Fatalf("Unable to parse '%s' as log level: %s", cfg.LogLevel, err)
+		}
+
+		log.SetLevel(lvl)
+	} else {
+		log.SetLevel(log.WarnLevel)
+	}
 
 	// Fire up outputs
 	for _, c := range cfg.Outputs {
@@ -44,7 +49,7 @@ func main() {
 
 		outputs[c.Name] = o
 	}
-	l.Infof("Outputs started: %d", len(outputs))
+	l.Warnf("Outputs started: %d", len(outputs))
 
 	// Fire up inputs
 	unusedOutputs := map[string]bool{}
@@ -69,13 +74,13 @@ func main() {
 
 		inputs[c.Name] = i
 	}
-	l.Infof("Inputs started: %d", len(inputs))
+	l.Warnf("Inputs started: %d", len(inputs))
 
 	if len(unusedOutputs) > 0 {
 		l.Fatalf("Unused outputs in a config file: %+v", unusedOutputs)
 	}
 
-	l.Infof("HTTP listening to %s", cfg.ListenHTTP)
+	l.Warnf("HTTP listening to %s", cfg.ListenHTTP)
 	go initHTTP()
 
 	// Set up signal handling
@@ -106,5 +111,5 @@ func main() {
 		o.Close()
 	}
 
-	l.Infof("Shutdown complete")
+	l.Warnf("Shutdown complete")
 }

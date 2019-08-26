@@ -54,6 +54,7 @@ type config struct {
 
 	StatsInterval duration `toml:"stats_interval"`
 	BufferSize    int      `toml:"buffer_size"`
+	LogLevel      string   `toml:"log_level"`
 
 	Inputs  map[string]*inputCfg  `toml:"input"`
 	Outputs map[string]*outputCfg `toml:"output"`
