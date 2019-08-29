@@ -3,6 +3,15 @@ package main
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
+	promTgtBuffered = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tgt_buffered",
+			Help: "Number of events buffered by target",
+		},
+
+		[]string{"output", "target"},
+	)
+
 	promTgtSent = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tgt_sent",
@@ -12,10 +21,10 @@ var (
 		[]string{"output", "target"},
 	)
 
-	promTgtDropped = prometheus.NewCounterVec(
+	promTgtDroppedBufferFull = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "tgt_dropped",
-			Help: "Number of events dropped by target",
+			Name: "tgt_dropped_buffer_full",
+			Help: "Number of events dropped by target because the buffer is full",
 		},
 
 		[]string{"output", "target"},
@@ -24,10 +33,10 @@ var (
 	promTgtConnFailed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tgt_conn_failed",
-			Help: "Number of connection failures by target",
+			Help: "Number of connection failures by output/target/connection",
 		},
 
-		[]string{"output", "target"},
+		[]string{"output", "target", "conn"},
 	)
 
 	promTgtFlushFailed = prometheus.NewCounterVec(
@@ -49,16 +58,25 @@ var (
 		[]string{"output", "target"},
 	)
 
-	promOutProcessed = prometheus.NewCounterVec(
+	promOutReceived = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "out_sent",
-			Help: "Number of events sent by output",
+			Name: "out_received",
+			Help: "Number of events received by output",
 		},
 
 		[]string{"output"},
 	)
 
-	promOutNoTarget = prometheus.NewCounterVec(
+	promOutDroppedBufferFull = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "out_dropped_buffer_full",
+			Help: "Number of events dropped by output because the buffer is full",
+		},
+
+		[]string{"output"},
+	)
+
+	promOutDroppedNoTargets = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "out_no_target",
 			Help: "Number of events dropped because no targets alive by output",
@@ -70,13 +88,15 @@ var (
 
 func init() {
 	prometheus.MustRegister(
+		promTgtBuffered,
 		promTgtSent,
-		promTgtDropped,
+		promTgtDroppedBufferFull,
 		promTgtConnFailed,
 		promTgtFlushFailed,
 		promTgtFlushDuration,
 
-		promOutProcessed,
-		promOutNoTarget,
+		promOutReceived,
+		promOutDroppedBufferFull,
+		promOutDroppedNoTargets,
 	)
 }

@@ -1,21 +1,22 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/cespare/xxhash"
+	hhash "github.com/minio/highwayhash"
+)
+
+const (
+	ringIntervals = 8192
 )
 
 type output struct {
 	name string
-
-	typ outputType
+	typ  outputType
 
 	algo         outputAlgo
 	algoFailover bool
@@ -24,25 +25,38 @@ type output struct {
 	carbonFields []riemannFieldName
 	carbonValue  riemannValue
 
-	tgts    []*target
-	tgtCnt  uint64
-	tgtNext int
+	tgts     []*target
+	tgtsRing []*target
+	tgtCnt   uint64
+	tgtNext  int
 
 	wg sync.WaitGroup
-
-	ctx       context.Context
-	ctxCancel context.CancelFunc
 
 	getTargets func([]byte) []*target
 
 	stats struct {
-		processed        uint64
+		received         uint64
 		droppedNoTargets uint64
 	}
 
-	chanIn chan []*Event
-	rnd    *rand.Rand
+	chanShutdown chan struct{}
+
+	rnd *rand.Rand
 	*logger
+}
+
+func makeTargetsRing(tgts []*target) []*target {
+	ring := make([]*target, ringIntervals)
+
+	for i, j := 0, 0; i < ringIntervals; i++ {
+		ring[i] = tgts[j]
+
+		if j++; j >= len(tgts) {
+			j = 0
+		}
+	}
+
+	return ring
 }
 
 func newOutput(c *outputCfg) (o *output, err error) {
@@ -63,10 +77,10 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		algo:         algo,
 		algoFailover: c.AlgoFailover,
 
-		tgtCnt: uint64(len(c.Targets)),
-		chanIn: make(chan []*Event, cfg.BufferSize),
-		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
-		logger: &logger{fmt.Sprintf("Output %s", c.Name)},
+		tgtCnt:       uint64(len(c.Targets)),
+		chanShutdown: make(chan struct{}),
+		rnd:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		logger:       &logger{fmt.Sprintf("Output %s", c.Name)},
 	}
 
 	switch algo {
@@ -112,14 +126,13 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		o.Infof("Carbon fields: %v, value: %s", o.carbonFields, o.carbonValue)
 	}
 
-	o.ctx, o.ctxCancel = context.WithCancel(context.Background())
-
 	for _, h := range c.Targets {
 		o.tgts = append(o.tgts, newOutputTgt(h, c, o))
 	}
 
-	o.wg.Add(1)
-	go o.dispatch()
+	if algo == outputAlgoHash {
+		o.tgtsRing = makeTargetsRing(o.tgts)
+	}
 
 	if cfg.StatsInterval.Duration > 0 {
 		o.wg.Add(1)
@@ -130,26 +143,15 @@ func newOutput(c *outputCfg) (o *output, err error) {
 	return o, nil
 }
 
-func (o *output) dispatch() {
-	defer o.wg.Done()
-
-	var batch []*Event
-	for {
-		select {
-		case <-o.ctx.Done():
-			return
-
-		case batch = <-o.chanIn:
-			o.pushBatch(batch)
-		}
-	}
-}
-
 func (o *output) pushBatch(batch []*Event) {
 	var (
 		key  []byte
 		tgts []*target
 	)
+
+	l := uint64(len(batch))
+	atomic.AddUint64(&o.stats.received, l)
+	promOutReceived.WithLabelValues(o.name).Add(float64(l))
 
 	for _, e := range batch {
 		if o.algo == outputAlgoHash {
@@ -161,34 +163,27 @@ func (o *output) pushBatch(batch []*Event) {
 		if tgts = o.getTargets(key); len(tgts) == 0 {
 			o.Debugf("No targets, dropping event")
 			atomic.AddUint64(&o.stats.droppedNoTargets, 1)
-			promOutNoTarget.WithLabelValues(o.name).Add(1)
+			promOutDroppedNoTargets.WithLabelValues(o.name).Add(1)
 			continue
 		}
 
-		// Push the batch to all selected targets
+		// Push the event to all selected targets
 		for _, t := range tgts {
-			select {
-			case t.chanIn <- e:
-				atomic.AddUint64(&o.stats.processed, 1)
-				promOutProcessed.WithLabelValues(o.name).Add(1)
-			default:
-				atomic.AddUint64(&t.stats.dropped, 1)
-				promTgtDropped.WithLabelValues(o.name, t.host).Add(1)
-			}
+			t.push(e)
 		}
 	}
 }
 
-func (o *output) Close() {
-	o.ctxCancel()
+func (o *output) close() {
+	close(o.chanShutdown)
 	o.wg.Wait()
 
-	o.Infof("Closing targets...")
+	o.Warnf("Closing targets...")
 	for _, t := range o.tgts {
-		t.Close()
+		t.close()
 	}
 
-	o.Infof("Closed")
+	o.Warnf("All targets closed")
 }
 
 func (o *output) getKey(e *Event) []byte {
@@ -233,15 +228,25 @@ func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
 	return
 }
 
-func (o *output) getTargetsHash(key []byte) (tgts []*target) {
-	id := xxhash.Sum64(key) % o.tgtCnt
-	tgts = []*target{o.tgts[id]}
+func (o *output) getTargetsHash(key []byte) []*target {
+	i := hhash.Sum64(key, hashKey) % ringIntervals
+	left := o.tgtCnt
 
-	if o.algoFailover && !tgts[0].isAlive() {
-		tgts = o.getLiveTarget(true)
+	var t *target
+	for left > 0 {
+		t = o.tgtsRing[i]
+
+		if t.isAlive() {
+			return []*target{t}
+		}
+
+		left--
+		if i++; i >= ringIntervals {
+			i = 0
+		}
 	}
 
-	return
+	return []*target{}
 }
 
 func (o *output) getTargetsBroadcast(key []byte) (tgts []*target) {
@@ -249,30 +254,35 @@ func (o *output) getTargetsBroadcast(key []byte) (tgts []*target) {
 }
 
 func (o *output) statsTicker() {
-	defer o.wg.Done()
 	tick := time.NewTicker(cfg.StatsInterval.Duration)
-	defer tick.Stop()
+
+	defer func() {
+		tick.Stop()
+		o.wg.Done()
+	}()
 
 	for {
 		select {
-		case <-o.ctx.Done():
+		case <-o.chanShutdown:
 			return
+
 		case <-tick.C:
-			for _, r := range strings.Split(strings.TrimSpace(o.getStats()), "\n") {
+			for _, r := range o.getStats() {
 				o.Infof(r)
 			}
 		}
 	}
 }
 
-func (o *output) getStats() (s string) {
-	s = fmt.Sprintf("processed %d droppedNoTargets %d\n",
-		atomic.LoadUint64(&o.stats.processed),
+func (o *output) getStats() (s []string) {
+	s = append(s, fmt.Sprintf("received %d droppedNoTargets %d",
+		atomic.LoadUint64(&o.stats.received),
 		atomic.LoadUint64(&o.stats.droppedNoTargets),
-	)
+	))
 
 	for _, t := range o.tgts {
-		s += fmt.Sprintf("%s: %s\n", t.host, t.getStats())
+		s = append(s, fmt.Sprintf(" %s:", t.host))
+		s = append(s, t.getStats()...)
 	}
 
 	return

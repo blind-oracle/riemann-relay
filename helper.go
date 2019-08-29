@@ -17,7 +17,7 @@ type riemannFieldName struct {
 	name string
 }
 type riemannValue uint8
-type writeBatchFunc func([]*Event) error
+type writeBatchFunc func(net.Conn, []*Event) error
 
 func (a outputAlgo) String() string {
 	return outputAlgoMapRev[a]

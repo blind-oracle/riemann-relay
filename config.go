@@ -40,6 +40,7 @@ type outputCfg struct {
 	CarbonValue  string   `toml:"carbon_value"`
 
 	Targets           []string
+	Connections       int      `toml:"connections"`
 	ReconnectInterval duration `toml:"reconnect_interval"`
 	TimeoutConnect    duration `toml:"timeout_connect"`
 	TimeoutRead       duration `toml:"timeout_read"`
@@ -53,7 +54,6 @@ type config struct {
 	ListenHTTP string
 
 	StatsInterval duration `toml:"stats_interval"`
-	BufferSize    int      `toml:"buffer_size"`
 	LogLevel      string   `toml:"log_level"`
 
 	Inputs  map[string]*inputCfg  `toml:"input"`
@@ -64,7 +64,6 @@ func defaultConfig() config {
 	return config{
 		ListenHTTP:    "127.0.0.1:12347",
 		StatsInterval: duration{60 * time.Second},
-		BufferSize:    50000,
 
 		Outputs: map[string]*outputCfg{},
 	}
@@ -117,6 +116,10 @@ func configLoad(file string) error {
 
 		if o.BatchTimeout.Duration == 0 {
 			o.BatchTimeout.Duration = 1 * time.Second
+		}
+
+		if o.Connections == 0 {
+			o.Connections = 1
 		}
 
 		tgtMap := map[string]bool{}

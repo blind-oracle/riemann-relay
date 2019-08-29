@@ -6,19 +6,34 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	inputs  = map[string]*input{}
-	outputs = map[string]*output{}
+	version   string
+	startTime = time.Now()
+
+	hashKey = []byte{
+		0xf7, 0x74, 0x6b, 0xd7, 0xc2, 0x19, 0xe4, 0xa8,
+		0xc4, 0x8d, 0xc3, 0xd5, 0x0f, 0x7b, 0x1f, 0x54,
+		0x46, 0xa5, 0xdf, 0x7c, 0x64, 0x55, 0x1c, 0x8d,
+		0x77, 0x94, 0xbb, 0x5d, 0x9f, 0x63, 0x54, 0x63,
+	}
+
+	inputs      = map[string]*input{}
+	inputNames  []string
+	outputs     = map[string]*output{}
+	outputNames []string
 )
 
 func main() {
 	var err error
 
 	l := &logger{"Main"}
+	l.Warnf("riemann-relay v%s starting", version)
+
 	chanClose := make(chan struct{})
 
 	configFile := flag.String("config", "/etc/riemann-relay/riemann-relay.conf", "Path to a config file")
@@ -48,6 +63,7 @@ func main() {
 		}
 
 		outputs[c.Name] = o
+		outputNames = append(outputNames, c.Name)
 	}
 	l.Warnf("Outputs started: %d", len(outputs))
 
@@ -67,12 +83,13 @@ func main() {
 			if o, ok := outputs[on]; !ok {
 				l.Fatalf("Input %s: output '%s' not defined", c.Name, on)
 			} else {
-				i.addChannel(on, o.chanIn)
+				i.addHandler(on, o.pushBatch)
 				delete(unusedOutputs, on)
 			}
 		}
 
 		inputs[c.Name] = i
+		inputNames = append(inputNames, c.Name)
 	}
 	l.Warnf("Inputs started: %d", len(inputs))
 
@@ -103,12 +120,12 @@ func main() {
 
 	// Close inputs
 	for _, i := range inputs {
-		i.Close()
+		i.close()
 	}
 
 	// Drain & close outputs
 	for _, o := range outputs {
-		o.Close()
+		o.close()
 	}
 
 	l.Warnf("Shutdown complete")

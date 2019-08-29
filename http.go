@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
@@ -21,17 +22,23 @@ func initHTTP() {
 }
 
 func httpStats(w http.ResponseWriter, r *http.Request) {
-	var out string
+	out := fmt.Sprintf("riemann-relay v%s up for %s\n", version, time.Since(startTime))
 
-	for _, i := range inputs {
-		for _, r := range strings.Split(strings.TrimSpace(i.getStats()), "\n") {
-			out += fmt.Sprintf("Input %s: %s\n", i.name, r)
+	for _, n := range inputNames {
+		i := inputs[n]
+		out += fmt.Sprintf("Input %s:\n", n)
+
+		for _, r := range strings.Split(i.getStats(), "\n") {
+			out += fmt.Sprintf(" %s\n", r)
 		}
 	}
 
-	for _, o := range outputs {
-		for _, r := range strings.Split(strings.TrimSpace(o.getStats()), "\n") {
-			out += fmt.Sprintf("Output %s: %s\n", o.name, r)
+	for _, n := range outputNames {
+		o := outputs[n]
+		out += fmt.Sprintf("Output %s:\n", n)
+
+		for _, r := range o.getStats() {
+			out += fmt.Sprintf(" %s\n", r)
 		}
 	}
 

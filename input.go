@@ -25,6 +25,8 @@ var (
 	}
 )
 
+type hFunc func([]*Event)
+
 type wsError struct {
 	Error string
 }
@@ -39,7 +41,7 @@ type input struct {
 	timeoutRead  time.Duration
 	timeoutWrite time.Duration
 
-	chansOut map[string]chan []*Event
+	handlers map[string]hFunc
 	shutdown chan struct{}
 
 	wgAccept sync.WaitGroup
@@ -48,7 +50,6 @@ type input struct {
 	stats struct {
 		receivedBatches uint64
 		receivedEvents  uint64
-		dropped         uint64
 	}
 
 	conns map[string]net.Conn
@@ -59,7 +60,7 @@ type input struct {
 func newInput(c *inputCfg) (i *input, err error) {
 	i = &input{
 		name:         c.Name,
-		chansOut:     map[string]chan []*Event{},
+		handlers:     map[string]hFunc{},
 		timeoutRead:  c.TimeoutRead.Duration,
 		timeoutWrite: c.TimeoutWrite.Duration,
 		shutdown:     make(chan struct{}),
@@ -126,12 +127,12 @@ func listen(addr string) (net.Listener, error) {
 	return net.Listen(guessProto(addr), addr)
 }
 
-func (i *input) addChannel(name string, ch chan []*Event) error {
-	if _, ok := i.chansOut[name]; ok {
+func (i *input) addHandler(name string, hf hFunc) error {
+	if _, ok := i.handlers[name]; ok {
 		return fmt.Errorf("Output '%s' already registered", name)
 	}
 
-	i.chansOut[name] = ch
+	i.handlers[name] = hf
 	return nil
 }
 
@@ -150,10 +151,17 @@ func (i *input) statsTicker() {
 }
 
 func (i *input) getStats() string {
-	return fmt.Sprintf("receivedBatches %d receivedEvents %d dropped %d",
-		atomic.LoadUint64(&i.stats.receivedBatches),
-		atomic.LoadUint64(&i.stats.receivedEvents),
-		atomic.LoadUint64(&i.stats.dropped),
+	i.Lock()
+	defer i.Unlock()
+
+	b := atomic.LoadUint64(&i.stats.receivedBatches)
+	e := atomic.LoadUint64(&i.stats.receivedEvents)
+
+	return fmt.Sprintf("receivedBatches %d receivedEvents %d (avg %.1f events/batch) conns %d",
+		b,
+		e,
+		float64(e)/float64(b),
+		len(i.conns),
 	)
 }
 
@@ -165,7 +173,7 @@ func (i *input) acceptTCP() {
 		if err != nil {
 			select {
 			case <-i.shutdown:
-				i.Infof("Accepter closing")
+				i.Warnf("Accepter closing")
 				return
 			default:
 				i.Errorf("Error accepting : %s", err)
@@ -175,18 +183,30 @@ func (i *input) acceptTCP() {
 		i.wgConn.Add(1)
 		i.Infof("Connection from '%s'", c.RemoteAddr())
 
-		// Add connection to a map
-		i.Lock()
-		id := c.RemoteAddr().String()
-		if cc, ok := i.conns[id]; ok {
-			i.Warnf("Duplicate connection from '%s', closing old one", id)
-			cc.Close()
-		}
-		i.conns[id] = c
-		i.Unlock()
+		i.addConn(c)
 
-		go i.handleTCPConnection(newTimeoutConn(c, i.timeoutRead, i.timeoutWrite))
+		go i.handleTCPConnection(
+			newTimeoutConn(c, i.timeoutRead, i.timeoutWrite),
+		)
 	}
+}
+
+func (i *input) addConn(c net.Conn) {
+	i.Lock()
+	id := c.RemoteAddr().String()
+	if cc, ok := i.conns[id]; ok {
+		i.Warnf("Duplicate connection from '%s', closing old one", id)
+		cc.Close()
+	}
+	i.conns[id] = c
+	i.Unlock()
+}
+
+func (i *input) delConn(c net.Conn) {
+	i.Lock()
+	id := c.RemoteAddr().String()
+	delete(i.conns, id)
+	i.Unlock()
 }
 
 func (i *input) handleTCPConnection(c net.Conn) {
@@ -196,10 +216,7 @@ func (i *input) handleTCPConnection(c net.Conn) {
 		c.Close()
 		i.Infof("%s: Connection closed", peer)
 
-		// Remove connection from a map
-		i.Lock()
-		delete(i.conns, peer)
-		i.Unlock()
+		i.delConn(c)
 		i.wgConn.Done()
 	}()
 
@@ -209,6 +226,7 @@ func (i *input) handleTCPConnection(c net.Conn) {
 			select {
 			case <-i.shutdown:
 				return
+
 			default:
 				if err != io.EOF {
 					i.Warnf("%s: Unable to process message: %s", peer, err)
@@ -263,11 +281,16 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 		i.Errorf("%s: Websocket upgrade failed: %s", r.RemoteAddr, err)
 		return
 	}
-	i.Infof("%s: Websocket upgrade successful", r.RemoteAddr)
+	i.Debugf("%s: Websocket upgrade successful", r.RemoteAddr)
 
+	i.addConn(c.UnderlyingConn())
+
+	i.wgConn.Add(1)
 	defer func() {
+		i.wgConn.Done()
 		i.Infof("%s: Websocket connection closed", r.RemoteAddr)
 		c.Close()
+		i.delConn(c.UnderlyingConn())
 	}()
 
 	var (
@@ -316,7 +339,12 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 }
 
 func (i *input) handleHTTPEvent(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	i.wgConn.Add(1)
+
+	defer func() {
+		r.Body.Close()
+		i.wgConn.Done()
+	}()
 
 	buf, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -363,53 +391,61 @@ func (i *input) readTCPMessage(c net.Conn) (err error) {
 }
 
 func (i *input) sendEvents(events []*Event) {
+	atomic.AddUint64(&i.stats.receivedBatches, 1)
+	atomic.AddUint64(&i.stats.receivedEvents, uint64(len(events)))
+
+	now := pb.Int64(time.Now().UnixNano() / 1000)
 	for _, ev := range events {
 		if ev.GetTimeMicros() == 0 && ev.GetTime() == 0 {
-			ev.TimeMicros = pb.Int64(time.Now().UnixNano() / 1000)
+			ev.TimeMicros = now
 		}
 	}
 
-	for _, ch := range i.chansOut {
-		select {
-		case ch <- events:
-			atomic.AddUint64(&i.stats.receivedBatches, 1)
-			atomic.AddUint64(&i.stats.receivedEvents, uint64(len(events)))
-		case <-i.shutdown:
-			return
-		default:
-			atomic.AddUint64(&i.stats.dropped, 1)
-		}
+	for _, h := range i.handlers {
+		h(events)
 	}
-
-	return
 }
 
-func (i *input) Close() {
-	i.Infof("Closing...")
+func (i *input) close() {
+	i.Warnf("Closing...")
 	close(i.shutdown)
 
 	if i.listener != nil {
-		i.listener.Close()
-		i.Infof("TCP closed")
+		if err := i.listener.Close(); err != nil {
+			i.Errorf("Unable to close TCP listener: %s", err)
+		} else {
+			i.Warnf("TCP listener closed")
+		}
 	}
 
 	if i.listenerWS != nil {
 		ctx, cf := context.WithTimeout(context.Background(), 10*time.Second)
-		i.listenerWS.Shutdown(ctx)
+		if err := i.listenerWS.Shutdown(ctx); err != nil {
+			i.Errorf("Unable to close WS listener: %s", err)
+		} else {
+			i.Warnf("WS listener closed")
+		}
+
 		cf()
-		i.Infof("Websocket closed")
 	}
 
 	i.wgAccept.Wait()
 
 	// Close active connections
-	i.Lock()
-	i.Infof("%d active connections, closing", len(i.conns))
-	for _, c := range i.conns {
-		c.Close()
+	if i.listener != nil {
+		i.Lock()
+		i.Warnf("%d active connections, closing", len(i.conns))
+		for _, c := range i.conns {
+			if err := c.Close(); err != nil {
+				i.Errorf("Unable to close connection from %d: %s", c.RemoteAddr(), err)
+			} else {
+				i.Infof("Connection from %s closed", c.RemoteAddr())
+			}
+		}
+		i.Unlock()
 	}
-	i.Unlock()
-	i.wgConn.Wait()
 
-	i.Infof("Closed")
+	i.Warnf("Waiting for connection handlers to close")
+	i.wgConn.Wait()
+	i.Warnf("Input closed")
 }

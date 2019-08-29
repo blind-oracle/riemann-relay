@@ -18,7 +18,7 @@ build:
 gox-build:
 	rm -rf $(OUT)
 	mkdir -p $(OUT)
-	gox -os="linux" -arch="amd64" -output="$(OUT)/$(NAME)-{{.OS}}-{{.Arch}}" $(PACKAGE)
+	gox -os="linux" -arch="amd64" -output="$(OUT)/$(NAME)-{{.OS}}-{{.Arch}}" -ldflags "-s -w -X main.version=$(VERSION)" $(PACKAGE)
 	mkdir -p $(OUT)/root/etc/$(NAME)
 	cp riemann-relay.conf $(OUT)/root/etc/$(NAME)/$(NAME).conf
 
