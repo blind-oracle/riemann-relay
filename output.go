@@ -21,9 +21,9 @@ type output struct {
 	algo         outputAlgo
 	algoFailover bool
 
-	hashFields   []riemannFieldName
-	carbonFields []riemannFieldName
-	carbonValue  riemannValue
+	hashFields    []riemannFieldName
+	riemannFields []riemannFieldName
+	riemannValue  riemannValue
 
 	tgts     []*target
 	tgtsRing []*target
@@ -99,7 +99,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 	o.Infof("Starting output (type '%s', algo '%s')", typ, algo)
 
 	if algo == outputAlgoHash {
-		if o.hashFields, err = parseRiemannFields(c.HashFields); err != nil {
+		if o.hashFields, err = parseRiemannFields(c.HashFields, true); err != nil {
 			return
 		}
 
@@ -110,24 +110,35 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		o.Infof("Hash fields: %v", o.hashFields)
 	}
 
-	if typ == outputTypeCarbon {
-		if o.carbonFields, err = parseRiemannFields(c.CarbonFields); err != nil {
+	switch typ {
+	case outputTypeCarbon, outputTypeClickhouse:
+		onlyStrings := true
+		if typ == outputTypeClickhouse {
+			onlyStrings = false
+		}
+
+		if o.riemannFields, err = parseRiemannFields(c.RiemannFields, onlyStrings); err != nil {
 			return
 		}
 
-		if len(o.carbonFields) == 0 {
-			return nil, fmt.Errorf("You need to specify 'carbon_fields' for output type 'carbon'")
+		if len(o.riemannFields) == 0 {
+			return nil, fmt.Errorf("You need to specify 'riemann_fields' for this output type")
 		}
 
-		if o.carbonValue, ok = riemannValueMap[c.CarbonValue]; !ok {
-			return nil, fmt.Errorf("Unknown 'carbon_value': %s", c.CarbonValue)
+		if o.riemannValue, ok = riemannValueMap[c.RiemannValue]; !ok {
+			return nil, fmt.Errorf("Unknown 'riemann_value': %s", c.RiemannValue)
 		}
 
-		o.Infof("Carbon fields: %v, value: %s", o.carbonFields, o.carbonValue)
+		o.Infof("Riemann fields: %v, value: %s", o.riemannFields, o.riemannValue)
 	}
 
 	for _, h := range c.Targets {
-		o.tgts = append(o.tgts, newOutputTgt(h, c, o))
+		tgt, err := newOutputTgt(h, c, o)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to create target '%s': %s", h, err)
+		}
+
+		o.tgts = append(o.tgts, tgt)
 	}
 
 	if algo == outputAlgoHash {

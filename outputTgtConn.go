@@ -1,19 +1,29 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	pb "github.com/golang/protobuf/proto"
 )
 
 type tConn struct {
 	host string
+	url  string
 	id   int
 
-	conn  net.Conn
+	conn    net.Conn
+	httpCli *http.Client
+
 	alive bool
 
 	t *target
@@ -146,6 +156,10 @@ func (c *tConn) connect() (net.Conn, error) {
 }
 
 func (c *tConn) disconnect() {
+	if c.httpCli != nil {
+		return
+	}
+
 	c.Lock()
 	defer c.Unlock()
 
@@ -174,11 +188,6 @@ func (c *tConn) dispatch() {
 		case <-c.ctx.Done():
 			if !c.isAlive() {
 				c.Warnf("Connection is down, discarding %d events in buffer", len(c.chanIn))
-
-				// Flush the toilet
-				for range c.chanIn {
-				}
-
 				return
 			}
 
@@ -204,6 +213,7 @@ func (c *tConn) dispatch() {
 				c.Errorf("Unable to flush batch: %s", err)
 				// Requeue the event
 				c.chanIn <- e
+				c.Debugf("Event requeued")
 				time.Sleep(1 * time.Second)
 			}
 		}
@@ -274,14 +284,16 @@ func (c *tConn) tryFlush() error {
 
 // Assumes locked batch
 func (c *tConn) flush() (err error) {
-	c.Debugf("Waiting for the connection mutex")
-	c.Lock()
-	defer c.Unlock()
+	if c.httpCli == nil {
+		c.Debugf("Waiting for the connection mutex")
+		c.Lock()
+		defer c.Unlock()
+	}
 
 	c.Debugf("Flushing batch (%d events)", c.batch.count)
 	ts := time.Now()
 
-	if err = c.writeBatch(c.conn, c.batch.buf[:c.batch.count]); err != nil {
+	if err = c.writeBatch(c.batch.buf[:c.batch.count]); err != nil {
 		atomic.AddUint64(&c.stats.flushFailed, 1)
 		promTgtFlushFailed.WithLabelValues(c.t.o.name, c.t.host).Add(1)
 		c.Errorf("Unable to flush batch: %s", err)
@@ -305,10 +317,111 @@ func (c *tConn) flush() (err error) {
 }
 
 func (c *tConn) close() {
+	c.Infof("Closing...")
+
 	c.ctxCancel()
 	c.wg.Wait()
-	c.disconnect()
+
+	if c.httpCli == nil {
+		c.disconnect()
+	}
 
 	c.Warnf("Closed")
+	return
+}
+
+func (c *tConn) writeBatchCarbon(batch []*Event) (err error) {
+	var buf bytes.Buffer
+
+	c.t.Debugf("Preparing a batch of %d Carbon metrics", len(batch))
+	for _, e := range batch {
+		buf.Write(eventToCarbon(e, c.t.o.riemannFields, c.t.o.riemannValue))
+		buf.WriteByte('\n')
+	}
+
+	c.t.Debugf("Sending batch")
+	_, err = c.conn.Write(buf.Bytes())
+	return
+}
+
+func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
+	msg := &Msg{
+		Events: batch,
+	}
+
+	buf, err := pb.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("Unable to marshal Protobuf: %s", err)
+	}
+
+	if err = binary.Write(c.conn, binary.BigEndian, uint32(len(buf))); err != nil {
+		return fmt.Errorf("Unable to write Protobuf length: %s", err)
+	}
+
+	if _, err = c.conn.Write(buf); err != nil {
+		return fmt.Errorf("Unable to write Protobuf body: %s", err)
+	}
+	c.t.Debugf("Protobuf message sent (%d bytes)", len(buf))
+
+	var hdr uint32
+	if err = binary.Read(c.conn, binary.BigEndian, &hdr); err != nil {
+		if err == io.EOF {
+			return err
+		}
+
+		return fmt.Errorf("Unable to read Protobuf reply length: %s", err)
+	}
+	c.t.Debugf("Protobuf reply size read (%d bytes)", hdr)
+
+	buf = make([]byte, hdr)
+	if err = readPacket(c.conn, buf); err != nil {
+		return fmt.Errorf("Unable to read Protobuf reply body: %s", err)
+	}
+	c.t.Debugf("Protobuf reply body read")
+
+	msg.Reset()
+	if err = pb.Unmarshal(buf, msg); err != nil {
+		return fmt.Errorf("Unable to unmarshal Protobuf reply: %s", err)
+	}
+
+	if !msg.GetOk() {
+		return fmt.Errorf("Non-OK reply from Riemann")
+	}
+
+	c.t.Debugf("Protobuf reply body unmarshaled and OK")
+	return
+}
+
+func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rr, wr := io.Pipe()
+	go func() {
+		defer wr.Close()
+		for _, e := range batch {
+			if err := eventWriteClickhouseBinary(e, c.t.o.riemannFields, c.t.o.riemannValue, wr); err != nil {
+				return
+			}
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url, rr)
+	if err != nil {
+		return
+	}
+
+	resp, err := c.httpCli.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %s", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.StatusCode, string(body))
+	}
+
 	return
 }

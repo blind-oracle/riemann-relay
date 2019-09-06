@@ -1,16 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	fmt "fmt"
-	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
-
-	pb "github.com/golang/protobuf/proto"
 )
 
 type target struct {
@@ -35,7 +32,7 @@ type target struct {
 	*logger
 }
 
-func newOutputTgt(h string, cf *outputCfg, o *output) *target {
+func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 	t := &target{
 		host: h,
 		typ:  o.typ,
@@ -67,26 +64,57 @@ func newOutputTgt(h string, cf *outputCfg, o *output) *target {
 
 		c.ctx, c.ctxCancel = context.WithCancel(context.Background())
 
-		if o.typ == outputTypeRiemann {
-			c.timeoutRead = cf.TimeoutRead.Duration
+		switch o.typ {
+		case outputTypeCarbon, outputTypeRiemann:
+			if _, err := net.ResolveTCPAddr("tcp", h); err != nil {
+				return nil, fmt.Errorf("Bad TCP address '%s': %s", h, err)
+			}
 		}
 
 		switch o.typ {
 		case outputTypeCarbon:
-			c.writeBatch = t.writeBatchCarbon
+			c.writeBatch = c.writeBatchCarbon
 		case outputTypeRiemann:
-			c.writeBatch = t.writeBatchRiemann
+			c.timeoutRead = cf.TimeoutRead.Duration
+			c.writeBatch = c.writeBatchRiemann
+		case outputTypeClickhouse:
+			if cf.CHTable == "" {
+				return nil, fmt.Errorf("You need to specify 'ch_table'")
+			}
+
+			c.alive = true
+			c.writeBatch = c.writeBatchClickhouse
+			c.httpCli = &http.Client{
+				Timeout: c.timeoutWrite,
+			}
+
+			u, err := url.Parse(h)
+			if err != nil {
+				return nil, fmt.Errorf("Unable to parse Clickhouse URL '%s': %s", h, err)
+			}
+
+			q := u.Query()
+			q.Set("query", fmt.Sprintf("INSERT INTO %s FORMAT RowBinary", cf.CHTable))
+			u.RawQuery = q.Encode()
+			c.url = u.String()
+
+			c.Debugf("Clickhouse URL: %s", c.url)
 		}
 
 		t.conns = append(t.conns, c)
 
-		c.wg.Add(3)
-		go c.run(o.typ)
+		switch o.typ {
+		case outputTypeRiemann, outputTypeCarbon:
+			c.wg.Add(1)
+			go c.run(o.typ)
+		}
+
+		c.wg.Add(2)
 		go c.dispatch()
 		go c.periodicFlush()
 	}
 
-	return t
+	return t, nil
 }
 
 func (t *target) close() {
@@ -136,68 +164,6 @@ func (t *target) push(e *Event) {
 	promTgtDroppedBufferFull.WithLabelValues(t.o.name, t.host).Add(1)
 }
 
-func (t *target) writeBatchCarbon(c net.Conn, batch []*Event) (err error) {
-	var buf bytes.Buffer
-
-	t.Debugf("Preparing a batch of %d Carbon metrics", len(batch))
-	for _, e := range batch {
-		buf.Write(eventToCarbon(e, t.o.carbonFields, t.o.carbonValue))
-		buf.WriteByte('\n')
-	}
-
-	t.Debugf("Sending batch")
-	_, err = c.Write(buf.Bytes())
-	return
-}
-
-func (t *target) writeBatchRiemann(c net.Conn, batch []*Event) (err error) {
-	msg := &Msg{
-		Events: batch,
-	}
-
-	buf, err := pb.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("Unable to marshal Protobuf: %s", err)
-	}
-
-	if err = binary.Write(c, binary.BigEndian, uint32(len(buf))); err != nil {
-		return fmt.Errorf("Unable to write Protobuf length: %s", err)
-	}
-
-	if _, err = c.Write(buf); err != nil {
-		return fmt.Errorf("Unable to write Protobuf body: %s", err)
-	}
-	t.Debugf("Protobuf message sent (%d bytes)", len(buf))
-
-	var hdr uint32
-	if err = binary.Read(c, binary.BigEndian, &hdr); err != nil {
-		if err == io.EOF {
-			return err
-		}
-
-		return fmt.Errorf("Unable to read Protobuf reply length: %s", err)
-	}
-	t.Debugf("Protobuf reply size read (%d bytes)", hdr)
-
-	buf = make([]byte, hdr)
-	if err = readPacket(c, buf); err != nil {
-		return fmt.Errorf("Unable to read Protobuf reply body: %s", err)
-	}
-	t.Debugf("Protobuf reply body read")
-
-	msg.Reset()
-	if err = pb.Unmarshal(buf, msg); err != nil {
-		return fmt.Errorf("Unable to unmarshal Protobuf reply: %s", err)
-	}
-
-	if !msg.GetOk() {
-		return fmt.Errorf("Non-OK reply from Riemann")
-	}
-
-	t.Debugf("Protobuf reply body unmarshaled and OK")
-	return
-}
-
 func (t *target) getStats() (s []string) {
 	var (
 		cfT, sentT, ffT uint64
@@ -216,26 +182,26 @@ func (t *target) getStats() (s []string) {
 		bufT += buf
 		szT += sz
 
-		r := fmt.Sprintf("   %d: buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.1f%%",
+		r := fmt.Sprintf("   %d: buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f",
 			c.id,
 			atomic.LoadUint64(&c.stats.buffered),
 			sent,
 			atomic.LoadUint64(&c.stats.dropped),
 			cf,
 			ff,
-			float64(buf)/float64(sz)*100,
+			float64(buf)/float64(sz),
 		)
 
 		rows = append(rows, r)
 	}
 
-	r := fmt.Sprintf("  buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.1f%%",
+	r := fmt.Sprintf("  buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f",
 		atomic.LoadUint64(&t.stats.buffered),
 		sentT,
 		atomic.LoadUint64(&t.stats.dropped),
 		cfT,
 		ffT,
-		float64(bufT)/float64(szT)*100,
+		float64(bufT)/float64(szT),
 	)
 
 	return append(

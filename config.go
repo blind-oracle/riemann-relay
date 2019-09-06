@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -36,8 +35,11 @@ type outputCfg struct {
 	Algo         string
 	AlgoFailover bool     `toml:"algo_failover"`
 	HashFields   []string `toml:"hash_fields"`
-	CarbonFields []string `toml:"carbon_fields"`
-	CarbonValue  string   `toml:"carbon_value"`
+
+	CHTable string `toml:"ch_table"`
+
+	RiemannFields []string `toml:"riemann_fields"`
+	RiemannValue  string   `toml:"riemann_value"`
 
 	Targets           []string
 	Connections       int      `toml:"connections"`
@@ -129,10 +131,6 @@ func configLoad(file string) error {
 			}
 
 			tgtMap[t] = true
-
-			if _, err := net.ResolveTCPAddr("tcp", t); err != nil {
-				return fmt.Errorf("Output %s: %s: Bad TCP address specified: %s", n, t, err)
-			}
 		}
 	}
 

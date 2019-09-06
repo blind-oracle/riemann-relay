@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	math "math"
 	"net"
 	"strconv"
 	"strings"
@@ -17,7 +19,7 @@ type riemannFieldName struct {
 	name string
 }
 type riemannValue uint8
-type writeBatchFunc func(net.Conn, []*Event) error
+type writeBatchFunc func([]*Event) error
 
 func (a outputAlgo) String() string {
 	return outputAlgoMapRev[a]
@@ -47,6 +49,7 @@ func (v riemannValue) String() string {
 const (
 	outputTypeCarbon outputType = iota
 	outputTypeRiemann
+	outputTypeClickhouse
 )
 
 const (
@@ -64,6 +67,8 @@ const (
 	riemannFieldTag
 	riemannFieldAttr
 	riemannFieldCustom
+	riemannFieldTimestamp
+	riemannFieldValue
 )
 
 const (
@@ -75,8 +80,9 @@ const (
 
 var (
 	outputTypeMap = map[string]outputType{
-		"carbon":  outputTypeCarbon,
-		"riemann": outputTypeRiemann,
+		"carbon":     outputTypeCarbon,
+		"riemann":    outputTypeRiemann,
+		"clickhouse": outputTypeClickhouse,
 	}
 
 	outputAlgoMap = map[string]outputAlgo{
@@ -94,6 +100,8 @@ var (
 		"tag":         riemannFieldTag,
 		"attr":        riemannFieldAttr,
 		"custom":      riemannFieldCustom,
+		"timestamp":   riemannFieldTimestamp,
+		"value":       riemannFieldValue,
 	}
 
 	riemannValueMap = map[string]riemannValue{
@@ -127,7 +135,7 @@ func init() {
 	}
 }
 
-func parseRiemannFields(rfs []string) (rfns []riemannFieldName, err error) {
+func parseRiemannFields(rfs []string, onlyStrings bool) (rfns []riemannFieldName, err error) {
 	rhMap := map[string]bool{}
 	for _, rh := range rfs {
 		if rhMap[rh] {
@@ -152,6 +160,10 @@ func parseRiemannFields(rfs []string) (rfns []riemannFieldName, err error) {
 			}
 
 			fn.name = t[1]
+		case riemannFieldTimestamp, riemannFieldValue:
+			if onlyStrings {
+				return nil, fmt.Errorf("Timestamp and Value Riemann fields are not allowed here")
+			}
 		}
 
 		rfns = append(rfns, fn)
@@ -195,6 +207,61 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 
 	// Skip first dot
 	return b.Bytes()[1:]
+}
+
+func eventWriteClickhouseBinary(e *Event, hf []riemannFieldName, v riemannValue, w io.Writer) (err error) {
+	var attr *Attribute
+
+	for _, f := range hf {
+		var (
+			s string
+			i interface{}
+		)
+
+		switch f.f {
+		case riemannFieldState:
+			s = e.GetState()
+		case riemannFieldService:
+			s = e.GetService()
+		case riemannFieldHost:
+			s = e.GetHost()
+		case riemannFieldDescription:
+			s = e.GetDescription()
+		case riemannFieldTag:
+			if eventHasTag(e, f.name) {
+				s = f.name
+			}
+		case riemannFieldAttr:
+			if attr = eventGetAttr(e, f.name); attr != nil {
+				s = attr.GetValue()
+			}
+		case riemannFieldCustom:
+			s = f.name
+		case riemannFieldTimestamp:
+			i = uint32(eventGetTime(e))
+		case riemannFieldValue:
+			i = math.Float64bits(eventGetValue(e, v))
+		}
+
+		if s != "" {
+			b := make([]byte, 8)
+			n := binary.PutUvarint(b, uint64(len(s)))
+
+			if _, err = w.Write(b[:n]); err != nil {
+				return
+			}
+
+			if _, err = w.Write([]byte(s)); err != nil {
+				return
+			}
+		} else if i != nil {
+			if err = binary.Write(w, binary.LittleEndian, i); err != nil {
+				return
+			}
+		}
+	}
+
+	return
 }
 
 func eventGetValue(e *Event, v riemannValue) (o float64) {
@@ -256,6 +323,14 @@ func readPacket(r io.Reader, p []byte) error {
 	return nil
 }
 
+func eventGetTime(e *Event) int64 {
+	if e.GetTimeMicros() > 0 {
+		return e.GetTimeMicros() / 1000000
+	}
+
+	return e.GetTime()
+}
+
 func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 	var b bytes.Buffer
 
@@ -265,15 +340,7 @@ func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 	val := strconv.FormatFloat(eventGetValue(e, cv), 'f', -1, 64)
 	b.WriteString(val)
 	b.WriteByte(' ')
-
-	var t int64
-	if e.GetTimeMicros() > 0 {
-		t = e.GetTimeMicros() / 1000000
-	} else {
-		t = e.GetTime()
-	}
-
-	b.WriteString(strconv.FormatInt(t, 10))
+	b.WriteString(strconv.FormatInt(eventGetTime(e), 10))
 	return b.Bytes()
 }
 
