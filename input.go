@@ -168,6 +168,7 @@ func (i *input) getStats() string {
 func (i *input) acceptTCP() {
 	defer i.wgAccept.Done()
 
+loop:
 	for {
 		c, err := i.listener.Accept()
 		if err != nil {
@@ -177,6 +178,8 @@ func (i *input) acceptTCP() {
 				return
 			default:
 				i.Errorf("Error accepting : %s", err)
+				time.Sleep(time.Second)
+				continue loop
 			}
 		}
 

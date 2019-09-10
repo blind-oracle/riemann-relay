@@ -27,7 +27,7 @@ type output struct {
 
 	tgts     []*target
 	tgtsRing []*target
-	tgtCnt   uint64
+	tgtCnt   int
 	tgtNext  int
 
 	wg sync.WaitGroup
@@ -43,6 +43,7 @@ type output struct {
 
 	rnd *rand.Rand
 	*logger
+	sync.Mutex
 }
 
 func makeTargetsRing(tgts []*target) []*target {
@@ -77,7 +78,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		algo:         algo,
 		algoFailover: c.AlgoFailover,
 
-		tgtCnt:       uint64(len(c.Targets)),
+		tgtCnt:       len(c.Targets),
 		chanShutdown: make(chan struct{}),
 		rnd:          rand.New(rand.NewSource(time.Now().UnixNano())),
 		logger:       &logger{fmt.Sprintf("Output %s", c.Name)},
@@ -86,6 +87,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 	switch algo {
 	case outputAlgoFailover:
 		o.getTargets = o.getTargetsFailover
+		o.algoFailover = true
 	case outputAlgoRoundRobin:
 		o.getTargets = o.getTargetsRoundRobin
 	case outputAlgoHash:
@@ -164,7 +166,10 @@ func (o *output) pushBatch(batch []*Event) {
 	atomic.AddUint64(&o.stats.received, l)
 	promOutReceived.WithLabelValues(o.name).Add(float64(l))
 
+loop:
 	for _, e := range batch {
+		ok := false
+
 		if o.algo == outputAlgoHash {
 			key = o.getKey(e)
 			o.Debugf("Hash key: %s", key)
@@ -172,16 +177,31 @@ func (o *output) pushBatch(batch []*Event) {
 
 		// Compute a list of targets to send
 		if tgts = o.getTargets(key); len(tgts) == 0 {
-			o.Debugf("No targets, dropping event")
-			atomic.AddUint64(&o.stats.droppedNoTargets, 1)
-			promOutDroppedNoTargets.WithLabelValues(o.name).Add(1)
-			continue
+			goto fail
 		}
 
 		// Push the event to all selected targets
 		for _, t := range tgts {
-			t.push(e)
+			if t.push(e) {
+				ok = true
+				if o.algo != outputAlgoBroadcast {
+					continue loop
+				}
+			} else {
+				if !o.algoFailover {
+					continue loop
+				}
+			}
 		}
+
+		if ok {
+			continue loop
+		}
+
+	fail:
+		o.Debugf("All targets failed, dropping event")
+		atomic.AddUint64(&o.stats.droppedNoTargets, 1)
+		promOutDroppedNoTargets.WithLabelValues(o.name).Add(1)
 	}
 }
 
@@ -201,54 +221,53 @@ func (o *output) getKey(e *Event) []byte {
 	return eventCompileFields(e, o.hashFields, ".")
 }
 
-func (o *output) getLiveTarget(random bool) (tgts []*target) {
+func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
 	for _, t := range o.tgts {
 		if t.isAlive() {
 			tgts = append(tgts, t)
-			if !random {
-				return
-			}
 		}
-	}
-
-	if len(tgts) == 0 {
-		return
-	}
-
-	return []*target{
-		tgts[o.rnd.Intn(len(tgts))],
-	}
-}
-
-func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
-	return o.getLiveTarget(false)
-}
-
-func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
-	if o.tgtNext >= len(o.tgts) {
-		o.tgtNext = 0
-	}
-
-	tgts = []*target{o.tgts[o.tgtNext]}
-	o.tgtNext++
-
-	if o.algoFailover && !tgts[0].isAlive() {
-		tgts = o.getLiveTarget(true)
 	}
 
 	return
 }
 
-func (o *output) getTargetsHash(key []byte) []*target {
+func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
+	o.Lock()
+	if o.tgtNext >= o.tgtCnt {
+		o.tgtNext = 0
+	}
+
+	left := o.tgtCnt
+	i := o.tgtNext
+	o.tgtNext++
+	o.Unlock()
+
+	for left > 0 {
+		if i >= o.tgtCnt {
+			i = 0
+		}
+
+		t := o.tgts[i]
+		if t.isAlive() {
+			tgts = append(tgts, t)
+		}
+
+		i++
+		left--
+	}
+
+	return
+}
+
+func (o *output) getTargetsHash(key []byte) (tgts []*target) {
 	i := hhash.Sum64(key, hashKey) % ringIntervals
 	left := o.tgtCnt
 
-	var t *target
 	for left > 0 {
-		t = o.tgtsRing[i]
+		t := o.tgtsRing[i]
 
 		if t.isAlive() {
-			return []*target{t}
+			tgts = append(tgts, t)
 		}
 
 		left--
@@ -257,7 +276,7 @@ func (o *output) getTargetsHash(key []byte) []*target {
 		}
 	}
 
-	return []*target{}
+	return
 }
 
 func (o *output) getTargetsBroadcast(key []byte) (tgts []*target) {

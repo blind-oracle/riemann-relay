@@ -49,8 +49,8 @@ type tConn struct {
 
 	writeBatch writeBatchFunc
 
-	wg sync.WaitGroup
-	sync.RWMutex
+	wg      sync.WaitGroup
+	connMtx sync.Mutex
 
 	stats struct {
 		buffered    uint64
@@ -61,10 +61,12 @@ type tConn struct {
 	}
 
 	*logger
+	sync.RWMutex
 }
 
 func (c *tConn) run(typ outputType) {
 	defer c.wg.Done()
+	c.connMtx.Lock()
 
 loop:
 	for {
@@ -81,6 +83,7 @@ loop:
 
 				select {
 				case <-c.ctx.Done():
+					c.connMtx.Unlock()
 					return
 				case <-time.After(c.reconnectInterval):
 				}
@@ -91,24 +94,28 @@ loop:
 			c.Lock()
 			c.conn = newTimeoutConn(conn, c.timeoutRead, c.timeoutWrite)
 			c.alive = true
-			c.Unlock()
 
 			if typ == outputTypeCarbon {
 				go c.checkEOF()
 			}
 
-			c.Infof("Connection established")
 			c.chanClose = make(chan struct{})
+			c.Unlock()
+			c.Infof("Connection established")
+
+			c.connMtx.Unlock()
 
 			select {
 			case <-c.ctx.Done():
 				return
 
 			case <-c.chanClose:
+				c.connMtx.Lock()
 				c.Errorf("Connection broken")
 
 				select {
 				case <-c.ctx.Done():
+					c.connMtx.Unlock()
 					return
 				case <-time.After(c.reconnectInterval):
 				}
@@ -198,24 +205,30 @@ func (c *tConn) dispatch() {
 				select {
 				case e = <-c.chanIn:
 					if err = c.push(e); err != nil {
-						c.Errorf("Unable to flush batch: %s", err)
+						c.Errorf("Unable to flush: %s", err)
 						return
 					}
 
 				default:
-					c.Warnf("Buffer flushed")
+					if err = c.tryFlush(); err != nil {
+						c.Errorf("Unable to flush: %s", err)
+					} else {
+						c.Warnf("Buffer flushed")
+					}
+
 					return
 				}
 			}
 
 		case e = <-c.chanIn:
+			c.connMtx.Lock()
 			if err = c.push(e); err != nil {
 				c.Errorf("Unable to flush batch: %s", err)
 				// Requeue the event
 				c.chanIn <- e
 				c.Debugf("Event requeued")
-				time.Sleep(1 * time.Second)
 			}
+			c.connMtx.Unlock()
 		}
 	}
 }
@@ -252,6 +265,7 @@ func (c *tConn) push(e *Event) (err error) {
 
 func (c *tConn) periodicFlush() {
 	tick := time.NewTicker(c.batch.timeout)
+
 	defer func() {
 		tick.Stop()
 		c.wg.Done()
@@ -260,9 +274,9 @@ func (c *tConn) periodicFlush() {
 	for {
 		select {
 		case <-tick.C:
-			if c.isAlive() {
-				c.tryFlush()
-			}
+			c.connMtx.Lock()
+			c.tryFlush()
+			c.connMtx.Unlock()
 
 		case <-c.ctx.Done():
 			return
@@ -284,12 +298,6 @@ func (c *tConn) tryFlush() error {
 
 // Assumes locked batch
 func (c *tConn) flush() (err error) {
-	if c.httpCli == nil {
-		c.Debugf("Waiting for the connection mutex")
-		c.Lock()
-		defer c.Unlock()
-	}
-
 	c.Debugf("Flushing batch (%d events)", c.batch.count)
 	ts := time.Now()
 

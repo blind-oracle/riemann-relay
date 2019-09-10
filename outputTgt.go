@@ -137,7 +137,7 @@ func (t *target) isAlive() bool {
 	return false
 }
 
-func (t *target) push(e *Event) {
+func (t *target) push(e *Event) bool {
 	left := t.connCnt
 
 	var c *tConn
@@ -154,7 +154,7 @@ func (t *target) push(e *Event) {
 		if c.isAlive() && c.bufferEvent(e) {
 			atomic.AddUint64(&t.stats.buffered, 1)
 			promTgtBuffered.WithLabelValues(t.o.name, t.host).Add(1)
-			return
+			return true
 		}
 
 		left--
@@ -162,6 +162,7 @@ func (t *target) push(e *Event) {
 
 	atomic.AddUint64(&t.stats.dropped, 1)
 	promTgtDroppedBufferFull.WithLabelValues(t.o.name, t.host).Add(1)
+	return false
 }
 
 func (t *target) getStats() (s []string) {

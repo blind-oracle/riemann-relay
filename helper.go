@@ -172,32 +172,41 @@ func parseRiemannFields(rfs []string, onlyStrings bool) (rfns []riemannFieldName
 	return
 }
 
+func eventGetField(e *Event, f riemannFieldName, v riemannValue) (i interface{}) {
+	switch f.f {
+	case riemannFieldState:
+		i = e.GetState()
+	case riemannFieldService:
+		i = e.GetService()
+	case riemannFieldHost:
+		i = e.GetHost()
+	case riemannFieldDescription:
+		i = e.GetDescription()
+	case riemannFieldTag:
+		if eventHasTag(e, f.name) {
+			i = f.name
+		}
+	case riemannFieldAttr:
+		if attr := eventGetAttr(e, f.name); attr != nil {
+			i = attr.GetValue()
+		}
+	case riemannFieldCustom:
+		i = f.name
+	case riemannFieldTimestamp:
+		i = uint32(eventGetTime(e))
+	case riemannFieldValue:
+		i = math.Float64bits(eventGetValue(e, v))
+	}
+
+	return
+}
+
 func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
-	var (
-		b    bytes.Buffer
-		attr *Attribute
-	)
+	var b bytes.Buffer
 
 	for _, f := range hf {
-		switch f.f {
-		case riemannFieldState:
-			b.WriteString(sep + e.GetState())
-		case riemannFieldService:
-			b.WriteString(sep + e.GetService())
-		case riemannFieldHost:
-			b.WriteString(sep + e.GetHost())
-		case riemannFieldDescription:
-			b.WriteString(sep + e.GetDescription())
-		case riemannFieldTag:
-			if eventHasTag(e, f.name) {
-				b.WriteString(sep + f.name)
-			}
-		case riemannFieldAttr:
-			if attr = eventGetAttr(e, f.name); attr != nil {
-				b.WriteString(sep + attr.GetValue())
-			}
-		case riemannFieldCustom:
-			b.WriteString(sep + f.name)
+		if i := eventGetField(e, f, riemannValueAny); i != nil {
+			b.WriteString(sep + i.(string))
 		}
 	}
 
@@ -210,54 +219,29 @@ func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
 }
 
 func eventWriteClickhouseBinary(e *Event, hf []riemannFieldName, v riemannValue, w io.Writer) (err error) {
-	var attr *Attribute
-
 	for _, f := range hf {
-		var (
-			s string
-			i interface{}
-		)
+		i := eventGetField(e, f, v)
 
-		switch f.f {
-		case riemannFieldState:
-			s = e.GetState()
-		case riemannFieldService:
-			s = e.GetService()
-		case riemannFieldHost:
-			s = e.GetHost()
-		case riemannFieldDescription:
-			s = e.GetDescription()
-		case riemannFieldTag:
-			if eventHasTag(e, f.name) {
-				s = f.name
-			}
-		case riemannFieldAttr:
-			if attr = eventGetAttr(e, f.name); attr != nil {
-				s = attr.GetValue()
-			}
-		case riemannFieldCustom:
-			s = f.name
-		case riemannFieldTimestamp:
-			i = uint32(eventGetTime(e))
-		case riemannFieldValue:
-			i = math.Float64bits(eventGetValue(e, v))
-		}
-
-		if s != "" {
+		switch j := i.(type) {
+		case string:
 			b := make([]byte, 8)
-			n := binary.PutUvarint(b, uint64(len(s)))
+			n := binary.PutUvarint(b, uint64(len(j)))
 
 			if _, err = w.Write(b[:n]); err != nil {
 				return
 			}
 
-			if _, err = w.Write([]byte(s)); err != nil {
+			if _, err = w.Write([]byte(j)); err != nil {
 				return
 			}
-		} else if i != nil {
-			if err = binary.Write(w, binary.LittleEndian, i); err != nil {
+
+		case uint32, uint64:
+			if err = binary.Write(w, binary.LittleEndian, j); err != nil {
 				return
 			}
+
+		default:
+			return fmt.Errorf("Unknown field value type: %T", i)
 		}
 	}
 
