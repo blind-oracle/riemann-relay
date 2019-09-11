@@ -4,12 +4,9 @@ import (
 	fmt "fmt"
 	"math/rand"
 	"strconv"
-	"testing"
 	"time"
 
-	pb "github.com/golang/protobuf/proto"
 	riemanngo "github.com/riemann/riemann-go-client"
-	"github.com/stretchr/testify/assert"
 )
 
 func sendTestEvent(addr string) (err error) {
@@ -51,31 +48,31 @@ func getTestInput() (i *input, c *inputCfg, err error) {
 	return
 }
 
-func Test_Input(t *testing.T) {
-	ch := make(chan []*Event, 10)
+// func Test_Input(t *testing.T) {
+// 	ch := make(chan []*Event, 10)
 
-	i, cf, err := getTestInput()
-	assert.Nil(t, err)
-	i.addChannel("test", ch)
+// 	i, cf, err := getTestInput()
+// 	assert.Nil(t, err)
+// 	i.addChannel("test", ch)
 
-	err = sendTestEvent(cf.Listen)
-	assert.Nil(t, err)
+// 	err = sendTestEvent(cf.Listen)
+// 	assert.Nil(t, err)
 
-	assert.Equal(t, "receivedBatches 1 receivedEvents 1 dropped 0", i.getStats())
-	i.Close()
+// 	assert.Equal(t, "receivedBatches 1 receivedEvents 1 dropped 0", i.getStats())
+// 	i.Close()
 
-	evT := &Event{
-		Service:     pb.String("foo"),
-		Host:        pb.String("bar"),
-		Description: pb.String("baz"),
-	}
+// 	evT := &Event{
+// 		Service:     pb.String("foo"),
+// 		Host:        pb.String("bar"),
+// 		Description: pb.String("baz"),
+// 	}
 
-	batch, ok := <-ch
-	assert.True(t, ok)
-	assert.Equal(t, 1, len(batch))
+// 	batch, ok := <-ch
+// 	assert.True(t, ok)
+// 	assert.Equal(t, 1, len(batch))
 
-	ev := batch[0]
-	assert.Equal(t, evT.Service, ev.Service)
-	assert.Equal(t, evT.Host, ev.Host)
-	assert.Equal(t, evT.Description, ev.Description)
-}
+// 	ev := batch[0]
+// 	assert.Equal(t, evT.Service, ev.Service)
+// 	assert.Equal(t, evT.Host, ev.Host)
+// 	assert.Equal(t, evT.Description, ev.Description)
+// }

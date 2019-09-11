@@ -18,7 +18,10 @@ func initHTTP() {
 
 	http.HandleFunc("/stats", httpStats)
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.Serve(httpLis, nil))
+
+	if err = http.Serve(httpLis, nil); err != http.ErrServerClosed {
+		log.Fatalf("HTTP listening error: %s", err)
+	}
 }
 
 func httpStats(w http.ResponseWriter, r *http.Request) {

@@ -5,8 +5,12 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"runtime"
+	"sort"
 	"syscall"
 	"time"
+
+	_ "net/http/pprof"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -14,13 +18,6 @@ import (
 var (
 	version   string
 	startTime = time.Now()
-
-	hashKey = []byte{
-		0xf7, 0x74, 0x6b, 0xd7, 0xc2, 0x19, 0xe4, 0xa8,
-		0xc4, 0x8d, 0xc3, 0xd5, 0x0f, 0x7b, 0x1f, 0x54,
-		0x46, 0xa5, 0xdf, 0x7c, 0x64, 0x55, 0x1c, 0x8d,
-		0x77, 0x94, 0xbb, 0x5d, 0x9f, 0x63, 0x54, 0x63,
-	}
 
 	inputs      = map[string]*input{}
 	inputNames  []string
@@ -32,7 +29,7 @@ func main() {
 	var err error
 
 	l := &logger{"Main"}
-	l.Warnf("riemann-relay v%s starting", version)
+	l.Warnf("riemann-relay v%s (%s) starting", version, runtime.Version())
 
 	chanClose := make(chan struct{})
 
@@ -65,6 +62,7 @@ func main() {
 		outputs[c.Name] = o
 		outputNames = append(outputNames, c.Name)
 	}
+	sort.Strings(outputNames)
 	l.Warnf("Outputs started: %d", len(outputs))
 
 	// Fire up inputs
@@ -91,6 +89,7 @@ func main() {
 		inputs[c.Name] = i
 		inputNames = append(inputNames, c.Name)
 	}
+	sort.Strings(inputNames)
 	l.Warnf("Inputs started: %d", len(inputs))
 
 	if len(unusedOutputs) > 0 {

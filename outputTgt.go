@@ -11,12 +11,17 @@ import (
 )
 
 type target struct {
+	id   int
 	host string
 	typ  outputType
 
-	conns    []*tConn
-	connCnt  int
-	connNext int
+	conns         []*tConn
+	connsAliveMap map[int]*tConn
+	connsAlive    []*tConn
+	connsAliveCnt int
+	connsCnt      int
+	connNext      int
+	connMtx       sync.Mutex
 
 	o *output
 
@@ -27,7 +32,6 @@ type target struct {
 
 	wg sync.WaitGroup
 
-	connMtx sync.Mutex
 	sync.RWMutex
 	*logger
 }
@@ -37,8 +41,9 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 		host: h,
 		typ:  o.typ,
 
-		o:       o,
-		connCnt: cf.Connections,
+		o:             o,
+		connsCnt:      cf.Connections,
+		connsAliveMap: map[int]*tConn{},
 
 		logger: &logger{fmt.Sprintf("%s: %s", cf.Name, h)},
 	}
@@ -127,41 +132,62 @@ func (t *target) close() {
 	return
 }
 
-func (t *target) isAlive() bool {
-	for _, c := range t.conns {
-		if c.isAlive() {
-			return true
-		}
+func (t *target) setConnAlive(id int, s bool) {
+	t.Lock()
+
+	if s {
+		t.connsAliveMap[id] = t.conns[id]
+	} else {
+		delete(t.connsAliveMap, id)
 	}
 
-	return false
+	t.connsAliveCnt = len(t.connsAliveMap)
+	t.connsAlive = make([]*tConn, t.connsAliveCnt)
+	i := 0
+	for _, v := range t.connsAliveMap {
+		t.connsAlive[i] = v
+		i++
+	}
+
+	if t.connsAliveCnt == 0 {
+		t.o.setTgtAlive(t.id, false)
+	} else {
+		t.o.setTgtAlive(t.id, true)
+	}
+
+	t.Unlock()
 }
 
 func (t *target) push(e *Event) bool {
-	left := t.connCnt
+	t.connMtx.Lock()
+	next := t.connNext
+	if t.connNext++; t.connNext >= t.connsCnt {
+		t.connNext = 0
+	}
+	t.connMtx.Unlock()
 
-	var c *tConn
+	t.RLock()
+	left := t.connsAliveCnt
 	for left > 0 {
-		t.Lock()
-		if t.connNext >= t.connCnt {
-			t.connNext = 0
+		if next >= t.connsAliveCnt {
+			next = 0
 		}
 
-		c = t.conns[t.connNext]
-		t.connNext++
-		t.Unlock()
-
-		if c.isAlive() && c.bufferEvent(e) {
+		if t.connsAlive[next].bufferEvent(e) {
 			atomic.AddUint64(&t.stats.buffered, 1)
 			promTgtBuffered.WithLabelValues(t.o.name, t.host).Add(1)
+			t.RUnlock()
 			return true
 		}
 
+		next++
 		left--
 	}
+	t.RUnlock()
 
 	atomic.AddUint64(&t.stats.dropped, 1)
 	promTgtDroppedBufferFull.WithLabelValues(t.o.name, t.host).Add(1)
+
 	return false
 }
 
@@ -172,6 +198,7 @@ func (t *target) getStats() (s []string) {
 		rows            []string
 	)
 
+	t.RLock()
 	for _, c := range t.conns {
 		cf := atomic.LoadUint64(&c.stats.connFailed)
 		cfT += cf
@@ -183,7 +210,9 @@ func (t *target) getStats() (s []string) {
 		bufT += buf
 		szT += sz
 
-		r := fmt.Sprintf("   %d: buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f",
+		_, alive := t.connsAliveMap[c.id]
+
+		r := fmt.Sprintf("   %d: buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f (alive: %t)",
 			c.id,
 			atomic.LoadUint64(&c.stats.buffered),
 			sent,
@@ -191,18 +220,21 @@ func (t *target) getStats() (s []string) {
 			cf,
 			ff,
 			float64(buf)/float64(sz),
+			alive,
 		)
 
 		rows = append(rows, r)
 	}
+	t.RUnlock()
 
-	r := fmt.Sprintf("  buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f",
+	r := fmt.Sprintf("  buffered %d sent %d dropped %d connFailed %d flushFailed %d bufferFill %.3f (alive: %t)",
 		atomic.LoadUint64(&t.stats.buffered),
 		sentT,
 		atomic.LoadUint64(&t.stats.dropped),
 		cfT,
 		ffT,
 		float64(bufT)/float64(szT),
+		t.connsAliveCnt > 0,
 	)
 
 	return append(

@@ -94,6 +94,7 @@ loop:
 			c.Lock()
 			c.conn = newTimeoutConn(conn, c.timeoutRead, c.timeoutWrite)
 			c.alive = true
+			c.t.setConnAlive(c.id, true)
 
 			if typ == outputTypeCarbon {
 				go c.checkEOF()
@@ -124,10 +125,11 @@ loop:
 	}
 }
 
-func (c *tConn) isAlive() bool {
+func (c *tConn) isAlive() (o bool) {
 	c.RLock()
-	defer c.RUnlock()
-	return c.alive
+	o = c.alive
+	c.RUnlock()
+	return
 }
 
 func (c *tConn) checkEOF() {
@@ -179,6 +181,7 @@ func (c *tConn) disconnect() {
 	}
 
 	c.alive = false
+	c.t.setConnAlive(c.id, false)
 	close(c.chanClose)
 }
 

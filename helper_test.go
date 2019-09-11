@@ -48,24 +48,24 @@ func Test_parseRiemannFields(t *testing.T) {
 		"attr:key3",
 	}
 
-	r, err := parseRiemannFields(f)
+	r, err := parseRiemannFields(f, true)
 	assert.Nil(t, err)
 	assert.Equal(t, testRfn, r)
 
 	f[0] = "abcd"
-	_, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f, true)
 	assert.NotNil(t, err)
 
 	f[0] = "attr"
-	_, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f, true)
 	assert.NotNil(t, err)
 
 	f[0] = "tag"
-	_, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f, true)
 	assert.NotNil(t, err)
 
 	f[0] = "service"
-	_, err = parseRiemannFields(f)
+	_, err = parseRiemannFields(f, true)
 	assert.NotNil(t, err)
 }
 
@@ -83,7 +83,7 @@ func Test_eventToCarbon(t *testing.T) {
 		"service",
 		"host",
 		"description",
-	})
+	}, true)
 
 	c := string(eventToCarbon(testEvent, rf, riemannValueAny))
 	assert.Equal(t, "foo.bar.baz.fooz 9876 1234567", c)
@@ -94,7 +94,7 @@ func Benchmark_eventToCarbon(b *testing.B) {
 		"service",
 		"host",
 		"description",
-	})
+	}, true)
 
 	for i := 0; i < b.N; i++ {
 		eventToCarbon(testEvent, rf, riemannValueAny)

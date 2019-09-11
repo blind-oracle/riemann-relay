@@ -11,7 +11,16 @@ import (
 )
 
 const (
-	ringIntervals = 8192
+	ringIntervals = 1024
+)
+
+var (
+	hashKey = []byte{
+		0xf7, 0x74, 0x6b, 0xd7, 0xc2, 0x19, 0xe4, 0xa8,
+		0xc4, 0x8d, 0xc3, 0xd5, 0x0f, 0x7b, 0x1f, 0x54,
+		0x46, 0xa5, 0xdf, 0x7c, 0x64, 0x55, 0x1c, 0x8d,
+		0x77, 0x94, 0xbb, 0x5d, 0x9f, 0x63, 0x54, 0x63,
+	}
 )
 
 type output struct {
@@ -25,10 +34,15 @@ type output struct {
 	riemannFields []riemannFieldName
 	riemannValue  riemannValue
 
-	tgts     []*target
-	tgtsRing []*target
-	tgtCnt   int
-	tgtNext  int
+	tgts              []*target
+	tgtsAlive         []*target
+	tgtsAliveMap      map[int]*target
+	tgtsAliveRing     []*target
+	tgtsAliveCnt      int
+	tgtsRingIntervals uint64
+	tgtCnt            int
+	tgtNext           int
+	tgtMtx            sync.Mutex
 
 	wg sync.WaitGroup
 
@@ -43,16 +57,18 @@ type output struct {
 
 	rnd *rand.Rand
 	*logger
-	sync.Mutex
+	sync.RWMutex
 }
 
 func makeTargetsRing(tgts []*target) []*target {
-	ring := make([]*target, ringIntervals)
+	rounded := (ringIntervals / len(tgts)) * len(tgts)
+	ring := make([]*target, rounded)
+	tgtCnt := len(tgts)
 
-	for i, j := 0, 0; i < ringIntervals; i++ {
+	for i, j := 0, 0; i < rounded; i++ {
 		ring[i] = tgts[j]
 
-		if j++; j >= len(tgts) {
+		if j++; j >= tgtCnt {
 			j = 0
 		}
 	}
@@ -79,6 +95,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		algoFailover: c.AlgoFailover,
 
 		tgtCnt:       len(c.Targets),
+		tgtsAliveMap: map[int]*target{},
 		chanShutdown: make(chan struct{}),
 		rnd:          rand.New(rand.NewSource(time.Now().UnixNano())),
 		logger:       &logger{fmt.Sprintf("Output %s", c.Name)},
@@ -134,17 +151,14 @@ func newOutput(c *outputCfg) (o *output, err error) {
 		o.Infof("Riemann fields: %v, value: %s", o.riemannFields, o.riemannValue)
 	}
 
-	for _, h := range c.Targets {
+	for id, h := range c.Targets {
 		tgt, err := newOutputTgt(h, c, o)
 		if err != nil {
 			return nil, fmt.Errorf("Unable to create target '%s': %s", h, err)
 		}
 
+		tgt.id = id
 		o.tgts = append(o.tgts, tgt)
-	}
-
-	if algo == outputAlgoHash {
-		o.tgtsRing = makeTargetsRing(o.tgts)
 	}
 
 	if cfg.StatsInterval.Duration > 0 {
@@ -205,6 +219,32 @@ loop:
 	}
 }
 
+func (o *output) setTgtAlive(id int, s bool) {
+	o.Lock()
+	if s {
+		o.tgtsAliveMap[id] = o.tgts[id]
+	} else {
+		delete(o.tgtsAliveMap, id)
+	}
+
+	o.tgtsAliveCnt = len(o.tgtsAliveMap)
+	o.tgtsAlive = make([]*target, o.tgtsAliveCnt)
+	i := 0
+	for _, v := range o.tgtsAliveMap {
+		o.tgtsAlive[i] = v
+		i++
+	}
+
+	if o.tgtsAliveCnt > 0 && o.algo == outputAlgoHash {
+		o.tgtsAliveRing = makeTargetsRing(o.tgtsAlive)
+		o.tgtsRingIntervals = uint64(len(o.tgtsAliveRing))
+	} else {
+		o.tgtsRingIntervals = 0
+	}
+
+	o.Unlock()
+}
+
 func (o *output) close() {
 	close(o.chanShutdown)
 	o.wg.Wait()
@@ -221,66 +261,73 @@ func (o *output) getKey(e *Event) []byte {
 	return eventCompileFields(e, o.hashFields, ".")
 }
 
-func (o *output) getTargetsFailover(key []byte) (tgts []*target) {
-	for _, t := range o.tgts {
-		if t.isAlive() {
-			tgts = append(tgts, t)
-		}
+func (o *output) getAliveTargets() (tgts []*target) {
+	o.RLock()
+	if o.tgtsAliveCnt == 0 {
+		o.RUnlock()
+		return
 	}
 
+	tgts = make([]*target, o.tgtsAliveCnt)
+	copy(tgts, o.tgtsAlive)
+	o.RUnlock()
 	return
 }
 
+func (o *output) getTargetsFailover(key []byte) []*target {
+	return o.getAliveTargets()
+}
+
+func (o *output) getTargetsBroadcast(key []byte) []*target {
+	return o.getAliveTargets()
+}
+
 func (o *output) getTargetsRoundRobin(key []byte) (tgts []*target) {
-	o.Lock()
-	if o.tgtNext >= o.tgtCnt {
+	o.tgtMtx.Lock()
+	i := o.tgtNext
+	if o.tgtNext++; o.tgtNext >= o.tgtCnt {
 		o.tgtNext = 0
 	}
+	o.tgtMtx.Unlock()
 
-	left := o.tgtCnt
-	i := o.tgtNext
-	o.tgtNext++
-	o.Unlock()
+	j := 0
+	o.RLock()
+	tgts = make([]*target, o.tgtsAliveCnt)
+	for j < o.tgtsAliveCnt {
+		tgts[j] = o.tgtsAlive[i]
+		j++
 
-	for left > 0 {
-		if i >= o.tgtCnt {
+		if i++; i >= o.tgtsAliveCnt {
 			i = 0
 		}
-
-		t := o.tgts[i]
-		if t.isAlive() {
-			tgts = append(tgts, t)
-		}
-
-		i++
-		left--
 	}
-
+	o.RUnlock()
 	return
 }
 
 func (o *output) getTargetsHash(key []byte) (tgts []*target) {
-	i := hhash.Sum64(key, hashKey) % ringIntervals
-	left := o.tgtCnt
+	j := 0
 
-	for left > 0 {
-		t := o.tgtsRing[i]
+	o.RLock()
+	if o.tgtsAliveCnt == 0 {
+		o.RUnlock()
+		return
+	}
 
-		if t.isAlive() {
-			tgts = append(tgts, t)
-		}
+	i := hhash.Sum64(key, hashKey) % o.tgtsRingIntervals
+	tgts = make([]*target, o.tgtsAliveCnt)
 
-		left--
-		if i++; i >= ringIntervals {
+	for j < o.tgtsAliveCnt {
+		tgts[j] = o.tgtsAliveRing[i]
+		j++
+
+		if i++; i >= o.tgtsRingIntervals {
 			i = 0
 		}
 	}
+	o.RUnlock()
 
 	return
-}
-
-func (o *output) getTargetsBroadcast(key []byte) (tgts []*target) {
-	return o.tgts
 }
 
 func (o *output) statsTicker() {
@@ -310,10 +357,12 @@ func (o *output) getStats() (s []string) {
 		atomic.LoadUint64(&o.stats.droppedNoTargets),
 	))
 
+	o.RLock()
 	for _, t := range o.tgts {
 		s = append(s, fmt.Sprintf(" %s:", t.host))
 		s = append(s, t.getStats()...)
 	}
+	o.RUnlock()
 
 	return
 }
