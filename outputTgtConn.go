@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -229,7 +230,6 @@ func (c *tConn) dispatch() {
 				c.Errorf("Unable to flush batch: %s", err)
 				// Requeue the event
 				c.chanIn <- e
-				c.Debugf("Event requeued")
 			}
 			c.connMtx.Unlock()
 		}
@@ -252,8 +252,6 @@ func (c *tConn) push(e *Event) (err error) {
 	defer c.batch.Unlock()
 
 	if c.batch.count >= c.batch.size {
-		c.Debugf("Batch is full (%d/%d), flushing", c.batch.count, c.batch.size)
-
 		if err = c.flush(); err != nil {
 			return
 		}
@@ -261,8 +259,6 @@ func (c *tConn) push(e *Event) (err error) {
 
 	c.batch.buf[c.batch.count] = e
 	c.batch.count++
-
-	c.Debugf("Batch is now %d/%d", c.batch.count, c.batch.size)
 	return nil
 }
 
@@ -295,13 +291,11 @@ func (c *tConn) tryFlush() error {
 		return nil
 	}
 
-	c.Debugf("Time to flush the batch!")
 	return c.flush()
 }
 
 // Assumes locked batch
 func (c *tConn) flush() (err error) {
-	c.Debugf("Flushing batch (%d events)", c.batch.count)
 	ts := time.Now()
 
 	if err = c.writeBatch(c.batch.buf[:c.batch.count]); err != nil {
@@ -317,7 +311,6 @@ func (c *tConn) flush() (err error) {
 	}
 
 	dur := time.Since(ts).Seconds()
-	c.Debugf("Batch flushed in %.2f sec", dur)
 
 	promTgtFlushDuration.WithLabelValues(c.t.o.name, c.t.host).Observe(dur)
 	atomic.AddUint64(&c.stats.sent, uint64(c.batch.count))
@@ -342,16 +335,23 @@ func (c *tConn) close() {
 }
 
 func (c *tConn) writeBatchCarbon(batch []*Event) (err error) {
-	var buf bytes.Buffer
+	b := bufferPool.Get().(*bytes.Buffer)
 
-	c.t.Debugf("Preparing a batch of %d Carbon metrics", len(batch))
 	for _, e := range batch {
-		buf.Write(eventToCarbon(e, c.t.o.riemannFields, c.t.o.riemannValue))
-		buf.WriteByte('\n')
+		eventWriteCompileFields(b, e, c.t.o.riemannFields, '.')
+		b.WriteByte(' ')
+
+		val := strconv.FormatFloat(eventGetValue(e, c.t.o.riemannValue), 'f', -1, 64)
+		b.WriteString(val)
+		b.WriteByte(' ')
+		b.WriteString(strconv.FormatInt(eventGetTime(e), 10))
+		b.WriteByte('\n')
 	}
 
-	c.t.Debugf("Sending batch")
-	_, err = c.conn.Write(buf.Bytes())
+	_, err = c.conn.Write(b.Bytes())
+
+	b.Reset()
+	bufferPool.Put(b)
 	return
 }
 
@@ -372,7 +372,6 @@ func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
 	if _, err = c.conn.Write(buf); err != nil {
 		return fmt.Errorf("Unable to write Protobuf body: %s", err)
 	}
-	c.t.Debugf("Protobuf message sent (%d bytes)", len(buf))
 
 	var hdr uint32
 	if err = binary.Read(c.conn, binary.BigEndian, &hdr); err != nil {
@@ -382,13 +381,11 @@ func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
 
 		return fmt.Errorf("Unable to read Protobuf reply length: %s", err)
 	}
-	c.t.Debugf("Protobuf reply size read (%d bytes)", hdr)
 
 	buf = make([]byte, hdr)
 	if err = readPacket(c.conn, buf); err != nil {
 		return fmt.Errorf("Unable to read Protobuf reply body: %s", err)
 	}
-	c.t.Debugf("Protobuf reply body read")
 
 	msg.Reset()
 	if err = pb.Unmarshal(buf, msg); err != nil {
@@ -399,7 +396,6 @@ func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
 		return fmt.Errorf("Non-OK reply from Riemann")
 	}
 
-	c.t.Debugf("Protobuf reply body unmarshaled and OK")
 	return
 }
 
@@ -411,7 +407,7 @@ func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
 	go func() {
 		defer wr.Close()
 		for _, e := range batch {
-			if err := eventWriteClickhouseBinary(e, c.t.o.riemannFields, c.t.o.riemannValue, wr); err != nil {
+			if err := eventWriteClickhouseBinary(wr, e, c.t.o.riemannFields, c.t.o.riemannValue); err != nil {
 				return
 			}
 		}

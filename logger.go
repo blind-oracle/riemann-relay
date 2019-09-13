@@ -1,12 +1,23 @@
 package main
 
-import log "github.com/sirupsen/logrus"
+import (
+	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
+)
+
+var (
+	logLevel logrus.Level
+)
 
 type logger struct {
 	pfx string
 }
 
 func (l *logger) Debugf(msg string, args ...interface{}) {
+	if logLevel != logrus.DebugLevel {
+		return
+	}
+
 	log.Debugf(l.pfx+": "+msg, args...)
 }
 

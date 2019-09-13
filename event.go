@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	pb "github.com/golang/protobuf/proto"
 )
 
 type attributeJSON struct {
@@ -47,14 +45,24 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 		return
 	}
 
+	// ev = &Event{
+	// 	Host:        pb.String(evJS.Host),
+	// 	Service:     pb.String(evJS.Service),
+	// 	State:       pb.String(evJS.State),
+	// 	Description: pb.String(evJS.Description),
+	// 	MetricD:     pb.Float64(evJS.Metric),
+	// 	Tags:        evJS.Tags,
+	// 	Ttl:         pb.Float32(evJS.TTL),
+	// }
+
 	ev = &Event{
-		Host:        pb.String(evJS.Host),
-		Service:     pb.String(evJS.Service),
-		State:       pb.String(evJS.State),
-		Description: pb.String(evJS.Description),
-		MetricD:     pb.Float64(evJS.Metric),
+		Host:        evJS.Host,
+		Service:     evJS.Service,
+		State:       evJS.State,
+		Description: evJS.Description,
+		MetricD:     evJS.Metric,
 		Tags:        evJS.Tags,
-		Ttl:         pb.Float32(evJS.TTL),
+		Ttl:         evJS.TTL,
 	}
 
 	var tm time.Time
@@ -64,7 +72,7 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 		tm = time.Now()
 	}
 
-	ev.TimeMicros = pb.Int64(tm.UnixNano() / 1000)
+	ev.TimeMicros = tm.UnixNano() / 1000
 
 	// Unmarshal again to a map
 	m := map[string]interface{}{}
@@ -78,16 +86,16 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 
 		if !eventJSONFields[klc] {
 			ev.Attributes = append(ev.Attributes, &Attribute{
-				Key:   pb.String(klc),
-				Value: pb.String(fmt.Sprintf("%v", v)),
+				Key:   klc,
+				Value: fmt.Sprintf("%v", v),
 			})
 		}
 	}
 
 	for _, attr := range evJS.Attributes {
 		ev.Attributes = append(ev.Attributes, &Attribute{
-			Key:   pb.String(attr.Key),
-			Value: pb.String(attr.Value),
+			Key:   attr.Key,
+			Value: attr.Value,
 		})
 	}
 

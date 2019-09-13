@@ -7,8 +7,9 @@ import (
 	"io"
 	math "math"
 	"net"
-	"strconv"
 	"strings"
+	"sync"
+	"unsafe"
 )
 
 type outputAlgo uint8
@@ -115,6 +116,18 @@ var (
 	outputAlgoMapRev   = map[outputAlgo]string{}
 	riemannFieldMapRev = map[riemannField]string{}
 	riemannValueMapRev = map[riemannValue]string{}
+
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 0, 131072))
+		},
+	}
+
+	bufferPoolSmall = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 0, 128))
+		},
+	}
 )
 
 func init() {
@@ -133,6 +146,10 @@ func init() {
 	for k, v := range riemannValueMap {
 		riemannValueMapRev[v] = k
 	}
+}
+
+func unsafeString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }
 
 func parseRiemannFields(rfs []string, onlyStrings bool) (rfns []riemannFieldName, err error) {
@@ -172,76 +189,99 @@ func parseRiemannFields(rfs []string, onlyStrings bool) (rfns []riemannFieldName
 	return
 }
 
-func eventGetField(e *Event, f riemannFieldName, v riemannValue) (i interface{}) {
+func eventWriteField(w io.Writer, e *Event, f riemannFieldName, v riemannValue) (int, error) {
 	switch f.f {
 	case riemannFieldState:
-		i = e.GetState()
+		return w.Write([]byte(e.State))
 	case riemannFieldService:
-		i = e.GetService()
+		return w.Write([]byte(e.Service))
 	case riemannFieldHost:
-		i = e.GetHost()
+		return w.Write([]byte(e.Host))
 	case riemannFieldDescription:
-		i = e.GetDescription()
+		return w.Write([]byte(e.Description))
 	case riemannFieldTag:
 		if eventHasTag(e, f.name) {
-			i = f.name
+			return w.Write([]byte(f.name))
 		}
 	case riemannFieldAttr:
 		if attr := eventGetAttr(e, f.name); attr != nil {
-			i = attr.GetValue()
+			return w.Write([]byte(attr.Value))
 		}
 	case riemannFieldCustom:
-		i = f.name
+		return w.Write([]byte(f.name))
 	case riemannFieldTimestamp:
-		i = uint32(eventGetTime(e))
-	case riemannFieldValue:
-		i = math.Float64bits(eventGetValue(e, v))
-	}
-
-	return
-}
-
-func eventCompileFields(e *Event, hf []riemannFieldName, sep string) []byte {
-	var b bytes.Buffer
-
-	for _, f := range hf {
-		if i := eventGetField(e, f, riemannValueAny); i != nil {
-			b.WriteString(sep + i.(string))
+		var t uint32
+		if e.TimeMicros > 0 {
+			t = uint32(e.TimeMicros / 1000000)
+		} else {
+			t = uint32(e.Time)
 		}
+
+		return 4, binary.Write(w, binary.LittleEndian, t)
+	case riemannFieldValue:
+		t := math.Float64bits(eventGetValue(e, v))
+		return 8, binary.Write(w, binary.LittleEndian, t)
 	}
 
-	if b.Len() == 0 {
-		return []byte{}
-	}
-
-	// Skip first dot
-	return b.Bytes()[1:]
+	return 0, nil
 }
 
-func eventWriteClickhouseBinary(e *Event, hf []riemannFieldName, v riemannValue, w io.Writer) (err error) {
-	for _, f := range hf {
-		i := eventGetField(e, f, v)
+func eventFieldLen(e *Event, f riemannFieldName) int {
+	switch f.f {
+	case riemannFieldState:
+		return len(e.State)
+	case riemannFieldService:
+		return len(e.Service)
+	case riemannFieldHost:
+		return len(e.Host)
+	case riemannFieldDescription:
+		return len(e.Description)
+	case riemannFieldTag:
+		if eventHasTag(e, f.name) {
+			return len(f.name)
+		}
 
-		switch j := i.(type) {
-		case string:
+		return 0
+	case riemannFieldAttr:
+		if attr := eventGetAttr(e, f.name); attr != nil {
+			return len(attr.Value)
+		}
+
+		return 0
+	case riemannFieldCustom:
+		return len(f.name)
+	}
+
+	return 0
+}
+
+func eventWriteCompileFields(b *bytes.Buffer, e *Event, hf []riemannFieldName, sep byte) {
+	for i, f := range hf {
+		if i != 0 {
+			b.WriteByte(sep)
+		}
+
+		eventWriteField(b, e, f, riemannValueAny)
+	}
+}
+
+func eventWriteClickhouseBinary(w io.Writer, e *Event, hf []riemannFieldName, v riemannValue) (err error) {
+	for _, f := range hf {
+		switch f.f {
+		default:
 			b := make([]byte, 8)
-			n := binary.PutUvarint(b, uint64(len(j)))
+			l := eventFieldLen(e, f)
+			n := binary.PutUvarint(b, uint64(l))
 
 			if _, err = w.Write(b[:n]); err != nil {
 				return
 			}
 
-			if _, err = w.Write([]byte(j)); err != nil {
-				return
-			}
+		case riemannFieldValue, riemannFieldTimestamp:
+		}
 
-		case uint32, uint64:
-			if err = binary.Write(w, binary.LittleEndian, j); err != nil {
-				return
-			}
-
-		default:
-			return fmt.Errorf("Unknown field value type: %T", i)
+		if _, err = eventWriteField(w, e, f, v); err != nil {
+			return
 		}
 	}
 
@@ -251,18 +291,18 @@ func eventWriteClickhouseBinary(e *Event, hf []riemannFieldName, v riemannValue,
 func eventGetValue(e *Event, v riemannValue) (o float64) {
 	switch v {
 	case riemannValueInt:
-		o = float64(e.GetMetricSint64())
+		o = float64(e.MetricSint64)
 	case riemannValueFloat:
-		o = float64(e.GetMetricF())
+		o = float64(e.MetricF)
 	case riemannValueDouble:
-		o = e.GetMetricD()
+		o = e.MetricD
 	case riemannValueAny:
-		if e.GetMetricD() > 0 {
-			o = e.GetMetricD()
-		} else if e.GetMetricSint64() > 0 {
-			o = float64(e.GetMetricSint64())
+		if e.MetricD > 0 {
+			o = e.MetricD
+		} else if e.MetricSint64 > 0 {
+			o = float64(e.MetricSint64)
 		} else {
-			o = float64(e.GetMetricF())
+			o = float64(e.MetricF)
 		}
 	}
 
@@ -271,7 +311,7 @@ func eventGetValue(e *Event, v riemannValue) (o float64) {
 
 func eventGetAttr(e *Event, name string) *Attribute {
 	for _, a := range e.Attributes {
-		if a.GetKey() == name {
+		if a.Key == name {
 			return a
 		}
 	}
@@ -308,25 +348,20 @@ func readPacket(r io.Reader, p []byte) error {
 }
 
 func eventGetTime(e *Event) int64 {
-	if e.GetTimeMicros() > 0 {
-		return e.GetTimeMicros() / 1000000
+	if e.TimeMicros > 0 {
+		return e.TimeMicros / 1000000
 	}
 
-	return e.GetTime()
+	return e.Time
 }
 
-func eventToCarbon(e *Event, cf []riemannFieldName, cv riemannValue) []byte {
-	var b bytes.Buffer
+// func eventToCarbon(w io.Writer, e *Event, cf []riemannFieldName, cv riemannValue) []byte {
 
-	b.Write(eventCompileFields(e, cf, "."))
-	b.WriteByte(' ')
+// 	b.Reset()
+// 	bufferPool.Put(b)
 
-	val := strconv.FormatFloat(eventGetValue(e, cv), 'f', -1, 64)
-	b.WriteString(val)
-	b.WriteByte(' ')
-	b.WriteString(strconv.FormatInt(eventGetTime(e), 10))
-	return b.Bytes()
-}
+// 	return b.Bytes()
+// }
 
 func guessProto(addr string) (proto string) {
 	if _, err := net.ResolveTCPAddr("tcp", addr); err == nil {

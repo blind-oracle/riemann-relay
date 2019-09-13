@@ -102,8 +102,6 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 			q.Set("query", fmt.Sprintf("INSERT INTO %s FORMAT RowBinary", cf.CHTable))
 			u.RawQuery = q.Encode()
 			c.url = u.String()
-
-			c.Debugf("Clickhouse URL: %s", c.url)
 		}
 
 		t.conns = append(t.conns, c)

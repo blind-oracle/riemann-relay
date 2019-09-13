@@ -76,9 +76,9 @@ var (
 		[]string{"output"},
 	)
 
-	promOutDroppedNoTargets = prometheus.NewCounterVec(
+	promOutDroppedNoTargetsAlive = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "out_no_target",
+			Name: "out_no_target_alive",
 			Help: "Number of events dropped because no targets alive by output",
 		},
 
@@ -97,6 +97,6 @@ func init() {
 
 		promOutReceived,
 		promOutDroppedBufferFull,
-		promOutDroppedNoTargets,
+		promOutDroppedNoTargetsAlive,
 	)
 }

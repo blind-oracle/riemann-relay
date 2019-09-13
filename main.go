@@ -1,4 +1,5 @@
 //go:generate protoc --go_out=. riemann.proto
+
 package main
 
 import (
@@ -27,6 +28,7 @@ var (
 
 func main() {
 	var err error
+	runtime.SetMutexProfileFraction(5)
 
 	l := &logger{"Main"}
 	l.Warnf("riemann-relay v%s (%s) starting", version, runtime.Version())
@@ -48,8 +50,10 @@ func main() {
 		}
 
 		log.SetLevel(lvl)
+		logLevel = lvl
 	} else {
 		log.SetLevel(log.WarnLevel)
+		logLevel = log.WarnLevel
 	}
 
 	// Fire up outputs

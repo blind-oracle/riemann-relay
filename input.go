@@ -243,8 +243,8 @@ func (i *input) handleTCPConnection(c net.Conn) {
 
 func (i *input) sendReply(ok bool, reason string, c net.Conn) error {
 	msg := &Msg{
-		Ok:    pb.Bool(ok),
-		Error: pb.String(reason),
+		Ok:    ok,
+		Error: reason,
 	}
 
 	buf, err := pb.Marshal(msg)
@@ -284,7 +284,6 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 		i.Errorf("%s: Websocket upgrade failed: %s", r.RemoteAddr, err)
 		return
 	}
-	i.Debugf("%s: Websocket upgrade successful", r.RemoteAddr)
 
 	i.addConn(c.UnderlyingConn())
 
@@ -397,11 +396,15 @@ func (i *input) sendEvents(events []*Event) {
 	atomic.AddUint64(&i.stats.receivedBatches, 1)
 	atomic.AddUint64(&i.stats.receivedEvents, uint64(len(events)))
 
-	now := pb.Int64(time.Now().UnixNano() / 1000)
-	for _, ev := range events {
-		if ev.GetTimeMicros() == 0 && ev.GetTime() == 0 {
-			ev.TimeMicros = now
+	now := time.Now().UnixNano() / 1000
+	for _, e := range events {
+		if e.TimeMicros == 0 && e.Time == 0 {
+			e.TimeMicros = now
 		}
+
+		e.MetricD = eventGetValue(e, riemannValueAny)
+		e.MetricF = 0
+		e.MetricSint64 = 0
 	}
 
 	for _, h := range i.handlers {
