@@ -6,15 +6,19 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
-	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	pb "github.com/golang/protobuf/proto"
+	fh "github.com/valyala/fasthttp"
+)
+ 
+const (
+	maxBatchSize = 1000
+	maxAttrs = 20
 )
 
 type tConn struct {
@@ -23,7 +27,8 @@ type tConn struct {
 	id   int
 
 	conn    net.Conn
-	httpCli *http.Client
+	//httpCli *http.Client
+	httpCli *fh.Client
 
 	alive bool
 
@@ -399,10 +404,41 @@ func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
 	return
 }
 
-func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	defer cancel()
 
+// 	rr, wr := io.Pipe()
+// 	go func() {
+// 		defer wr.Close()
+// 		for _, e := range batch {
+// 			if err := eventWriteClickhouseBinary(wr, e, c.t.o.riemannFields, c.t.o.riemannValue); err != nil {
+// 				return
+// 			}
+// 		}
+// 	}()
+
+// 	req, err := http.NewRequestWithContext(ctx, "POST", c.url, rr)
+// 	if err != nil {
+// 		return
+// 	}
+
+// 	resp, err := c.httpCli.Do(req)
+// 	if err != nil {
+// 		return fmt.Errorf("HTTP request failed: %s", err)
+// 	}
+// 	defer resp.Body.Close()
+
+// 	body, _ := ioutil.ReadAll(resp.Body)
+
+// 	if resp.StatusCode != http.StatusOK {
+// 		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.StatusCode, string(body))
+// 	}
+
+// 	return
+// }
+
+func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
 	rr, wr := io.Pipe()
 	go func() {
 		defer wr.Close()
@@ -413,21 +449,24 @@ func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
 		}
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.url, rr)
-	if err != nil {
-		return
+	req := fh.AcquireRequest()
+	resp := fh.AcquireResponse()
+	
+	defer func() {
+		fh.ReleaseRequest(req)
+		fh.ReleaseResponse(resp)
+	}()
+
+	req.SetBodyStream(rr, -1)
+	req.Header.SetMethod("POST")
+	req.SetRequestURI(c.url)
+
+	if err = c.httpCli.Do(req, resp); err != nil {
+ 		return fmt.Errorf("HTTP request failed: %s", err)
 	}
 
-	resp, err := c.httpCli.Do(req)
-	if err != nil {
-		return fmt.Errorf("HTTP request failed: %s", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := ioutil.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.StatusCode, string(body))
+	if resp.Header.StatusCode() != 200 {
+ 		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.Header.StatusCode(), string(resp.Body()))
 	}
 
 	return

@@ -1,0 +1,23 @@
+namespace flatm;
+
+table Attr {
+    name: string;
+    value: string;
+}
+
+table Metric {
+    host: string;
+    service: string;
+    state: string;
+    description: string;
+    time: int64;
+    value: float64;
+    tags: [string];
+    attrs: [Attr];
+}
+
+table Batch {
+    metrics: [Metric];
+}
+
+root_type Batch;

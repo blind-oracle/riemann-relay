@@ -4,7 +4,7 @@ import (
 	"context"
 	fmt "fmt"
 	"net"
-	"net/http"
+	fh "github.com/valyala/fasthttp"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -89,8 +89,12 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 
 			c.alive = true
 			c.writeBatch = c.writeBatchClickhouse
-			c.httpCli = &http.Client{
-				Timeout: c.timeoutWrite,
+			// c.httpCli = &http.Client{
+			// 	Timeout: c.timeoutWrite,
+			// }
+
+			c.httpCli = &fh.Client{
+				WriteTimeout: c.timeoutWrite,
 			}
 
 			u, err := url.Parse(h)
