@@ -38,7 +38,7 @@ func Benchmark_convert(b *testing.B) {
 	fbb := fb.NewBuilder(131072)
 
 	for i := 0; i < b.N; i++ {
-		metricFromRiemannEvents(fbb, testBatch)
+		MetricFromRiemannEvents(fbb, testBatch)
 		fbb.Reset()
 	}
 }

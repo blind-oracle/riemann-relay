@@ -10,7 +10,8 @@ const (
 	maxAttrs     = 64
 )
 
-func metricFromRiemannEvents(b *fb.Builder, evs []*rpb.Event) {
+// MetricFromRiemannEvents converts a slice of Riemann events to flatbuffer
+func MetricFromRiemannEvents(b *fb.Builder, evs []*rpb.Event) {
 	var (
 		ia [maxAttrs]fb.UOffsetT
 		im [maxBatchSize]fb.UOffsetT
