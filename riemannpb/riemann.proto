@@ -1,5 +1,5 @@
 syntax = "proto3";
-package main;
+package riemannpb;
 
 message Event {
   int64 time = 1;

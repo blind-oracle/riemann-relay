@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 )
 
 type outputAlgo uint8
@@ -20,7 +22,7 @@ type riemannFieldName struct {
 	name string
 }
 type riemannValue uint8
-type writeBatchFunc func([]*Event) error
+type writeBatchFunc func([]*rpb.Event) error
 
 func (a outputAlgo) String() string {
 	return outputAlgoMapRev[a]
@@ -189,7 +191,7 @@ func parseRiemannFields(rfs []string, onlyStrings bool) (rfns []riemannFieldName
 	return
 }
 
-func eventWriteField(w io.Writer, e *Event, f riemannFieldName, v riemannValue) (int, error) {
+func eventWriteField(w io.Writer, e *rpb.Event, f riemannFieldName, v riemannValue) (int, error) {
 	switch f.f {
 	case riemannFieldState:
 		return w.Write([]byte(e.State))
@@ -226,7 +228,7 @@ func eventWriteField(w io.Writer, e *Event, f riemannFieldName, v riemannValue) 
 	return 0, nil
 }
 
-func eventFieldLen(e *Event, f riemannFieldName) int {
+func eventFieldLen(e *rpb.Event, f riemannFieldName) int {
 	switch f.f {
 	case riemannFieldState:
 		return len(e.State)
@@ -255,7 +257,7 @@ func eventFieldLen(e *Event, f riemannFieldName) int {
 	return 0
 }
 
-func eventWriteCompileFields(b *bytes.Buffer, e *Event, hf []riemannFieldName, sep byte) {
+func eventWriteCompileFields(b *bytes.Buffer, e *rpb.Event, hf []riemannFieldName, sep byte) {
 	for i, f := range hf {
 		if i != 0 {
 			b.WriteByte(sep)
@@ -265,7 +267,7 @@ func eventWriteCompileFields(b *bytes.Buffer, e *Event, hf []riemannFieldName, s
 	}
 }
 
-func eventWriteClickhouseBinary(w io.Writer, e *Event, hf []riemannFieldName, v riemannValue) (err error) {
+func eventWriteClickhouseBinary(w io.Writer, e *rpb.Event, hf []riemannFieldName, v riemannValue) (err error) {
 	for _, f := range hf {
 		switch f.f {
 		default:
@@ -288,7 +290,7 @@ func eventWriteClickhouseBinary(w io.Writer, e *Event, hf []riemannFieldName, v 
 	return
 }
 
-func eventGetValue(e *Event, v riemannValue) (o float64) {
+func eventGetValue(e *rpb.Event, v riemannValue) (o float64) {
 	switch v {
 	case riemannValueInt:
 		o = float64(e.MetricSint64)
@@ -309,7 +311,7 @@ func eventGetValue(e *Event, v riemannValue) (o float64) {
 	return
 }
 
-func eventGetAttr(e *Event, name string) *Attribute {
+func eventGetAttr(e *rpb.Event, name string) *rpb.Attribute {
 	for _, a := range e.Attributes {
 		if a.Key == name {
 			return a
@@ -319,7 +321,7 @@ func eventGetAttr(e *Event, name string) *Attribute {
 	return nil
 }
 
-func eventHasTag(e *Event, name string) bool {
+func eventHasTag(e *rpb.Event, name string) bool {
 	for _, t := range e.Tags {
 		if t == name {
 			return true
@@ -347,7 +349,7 @@ func readPacket(r io.Reader, p []byte) error {
 	return nil
 }
 
-func eventGetTime(e *Event) int64 {
+func eventGetTime(e *rpb.Event) int64 {
 	if e.TimeMicros > 0 {
 		return e.TimeMicros / 1000000
 	}

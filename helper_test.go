@@ -4,17 +4,18 @@ import (
 	"bytes"
 	"testing"
 
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	testEvent = &Event{
+	testEvent = &rpb.Event{
 		State:       "foo",
 		Service:     "bar",
 		Host:        "baz",
 		Description: "fooz",
 		Tags:        []string{"a", "b", "c"},
-		Attributes: []*Attribute{
+		Attributes: []*rpb.Attribute{
 			{Key: "key1", Value: "val1"},
 			{Key: "key2", Value: "val2"},
 		},

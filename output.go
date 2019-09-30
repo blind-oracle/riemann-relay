@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	hhash "github.com/minio/highwayhash"
 )
 
@@ -179,7 +180,7 @@ func newOutput(c *outputCfg) (o *output, err error) {
 	return o, nil
 }
 
-func (o *output) pushBatch(batch []*Event) {
+func (o *output) pushBatch(batch []*rpb.Event) {
 	var (
 		key                   *bytes.Buffer
 		tgts                  = o.tgtsPool.Get().([]*target)

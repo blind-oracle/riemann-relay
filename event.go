@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 )
 
 type attributeJSON struct {
@@ -39,7 +41,7 @@ var (
 	}
 )
 
-func eventFromJSON(msg []byte) (ev *Event, err error) {
+func eventFromJSON(msg []byte) (ev *rpb.Event, err error) {
 	evJS := &eventJSON{}
 	if err = json.Unmarshal(msg, evJS); err != nil {
 		return
@@ -55,7 +57,7 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 	// 	Ttl:         pb.Float32(evJS.TTL),
 	// }
 
-	ev = &Event{
+	ev = &rpb.Event{
 		Host:        evJS.Host,
 		Service:     evJS.Service,
 		State:       evJS.State,
@@ -85,7 +87,7 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 		klc := strings.ToLower(k)
 
 		if !eventJSONFields[klc] {
-			ev.Attributes = append(ev.Attributes, &Attribute{
+			ev.Attributes = append(ev.Attributes, &rpb.Attribute{
 				Key:   klc,
 				Value: fmt.Sprintf("%v", v),
 			})
@@ -93,7 +95,7 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 	}
 
 	for _, attr := range evJS.Attributes {
-		ev.Attributes = append(ev.Attributes, &Attribute{
+		ev.Attributes = append(ev.Attributes, &rpb.Attribute{
 			Key:   attr.Key,
 			Value: attr.Value,
 		})
@@ -102,7 +104,7 @@ func eventFromJSON(msg []byte) (ev *Event, err error) {
 	return
 }
 
-func eventsFromMultipleJSONs(msg []byte) (evs []*Event, err error) {
+func eventsFromMultipleJSONs(msg []byte) (evs []*rpb.Event, err error) {
 	for _, p := range bytes.Split(msg, []byte("\n")) {
 		p = bytes.TrimSpace(p)
 		if len(p) == 0 {

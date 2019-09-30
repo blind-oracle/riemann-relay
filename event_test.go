@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,13 +28,13 @@ const (
 )
 
 func Test_eventFromJSON(t *testing.T) {
-	ev := &Event{
+	ev := &rpb.Event{
 		Host:        "blah",
 		Service:     "foo",
 		Description: "baz",
 		State:       "ok",
 		Tags:        []string{"tag1", "tag2"},
-		Attributes: []*Attribute{
+		Attributes: []*rpb.Attribute{
 			{
 				Key:   "key1",
 				Value: "val1",

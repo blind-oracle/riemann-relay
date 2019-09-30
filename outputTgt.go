@@ -4,10 +4,12 @@ import (
 	"context"
 	fmt "fmt"
 	"net"
-	fh "github.com/valyala/fasthttp"
 	"net/url"
 	"sync"
 	"sync/atomic"
+
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
+	fh "github.com/valyala/fasthttp"
 )
 
 type target struct {
@@ -58,12 +60,12 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 			timeoutConnect:    cf.TimeoutConnect.Duration,
 			timeoutWrite:      cf.TimeoutWrite.Duration,
 
-			chanIn: make(chan *Event, cf.BufferSize/cf.Connections),
+			chanIn: make(chan *rpb.Event, cf.BufferSize/cf.Connections),
 
 			logger: &logger{fmt.Sprintf("%s: %s[%d]", cf.Name, h, i)},
 		}
 
-		c.batch.buf = make([]*Event, cf.BatchSize)
+		c.batch.buf = make([]*rpb.Event, cf.BatchSize)
 		c.batch.size = cf.BatchSize
 		c.batch.timeout = cf.BatchTimeout.Duration
 
@@ -160,7 +162,7 @@ func (t *target) setConnAlive(id int, s bool) {
 	t.Unlock()
 }
 
-func (t *target) push(e *Event) bool {
+func (t *target) push(e *rpb.Event) bool {
 	t.connMtx.Lock()
 	next := t.connNext
 	if t.connNext++; t.connNext >= t.connsCnt {

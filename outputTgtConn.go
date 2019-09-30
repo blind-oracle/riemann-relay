@@ -12,13 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	pb "github.com/golang/protobuf/proto"
 	fh "github.com/valyala/fasthttp"
-)
- 
-const (
-	maxBatchSize = 1000
-	maxAttrs = 20
 )
 
 type tConn struct {
@@ -26,7 +22,7 @@ type tConn struct {
 	url  string
 	id   int
 
-	conn    net.Conn
+	conn net.Conn
 	//httpCli *http.Client
 	httpCli *fh.Client
 
@@ -35,7 +31,7 @@ type tConn struct {
 	t *target
 
 	batch struct {
-		buf     []*Event
+		buf     []*rpb.Event
 		size    int
 		count   int
 		timeout time.Duration
@@ -48,7 +44,7 @@ type tConn struct {
 	timeoutWrite      time.Duration
 
 	chanClose chan struct{}
-	chanIn    chan *Event
+	chanIn    chan *rpb.Event
 
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -195,7 +191,7 @@ func (c *tConn) dispatch() {
 	defer c.wg.Done()
 
 	var (
-		e   *Event
+		e   *rpb.Event
 		err error
 	)
 
@@ -241,7 +237,7 @@ func (c *tConn) dispatch() {
 	}
 }
 
-func (c *tConn) bufferEvent(e *Event) bool {
+func (c *tConn) bufferEvent(e *rpb.Event) bool {
 	select {
 	case c.chanIn <- e:
 		atomic.AddUint64(&c.stats.buffered, 1)
@@ -252,7 +248,7 @@ func (c *tConn) bufferEvent(e *Event) bool {
 	}
 }
 
-func (c *tConn) push(e *Event) (err error) {
+func (c *tConn) push(e *rpb.Event) (err error) {
 	c.batch.Lock()
 	defer c.batch.Unlock()
 
@@ -339,7 +335,7 @@ func (c *tConn) close() {
 	return
 }
 
-func (c *tConn) writeBatchCarbon(batch []*Event) (err error) {
+func (c *tConn) writeBatchCarbon(batch []*rpb.Event) (err error) {
 	b := bufferPool.Get().(*bytes.Buffer)
 
 	for _, e := range batch {
@@ -360,8 +356,8 @@ func (c *tConn) writeBatchCarbon(batch []*Event) (err error) {
 	return
 }
 
-func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
-	msg := &Msg{
+func (c *tConn) writeBatchRiemann(batch []*rpb.Event) (err error) {
+	msg := &rpb.Msg{
 		Events: batch,
 	}
 
@@ -404,41 +400,7 @@ func (c *tConn) writeBatchRiemann(batch []*Event) (err error) {
 	return
 }
 
-// func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	defer cancel()
-
-// 	rr, wr := io.Pipe()
-// 	go func() {
-// 		defer wr.Close()
-// 		for _, e := range batch {
-// 			if err := eventWriteClickhouseBinary(wr, e, c.t.o.riemannFields, c.t.o.riemannValue); err != nil {
-// 				return
-// 			}
-// 		}
-// 	}()
-
-// 	req, err := http.NewRequestWithContext(ctx, "POST", c.url, rr)
-// 	if err != nil {
-// 		return
-// 	}
-
-// 	resp, err := c.httpCli.Do(req)
-// 	if err != nil {
-// 		return fmt.Errorf("HTTP request failed: %s", err)
-// 	}
-// 	defer resp.Body.Close()
-
-// 	body, _ := ioutil.ReadAll(resp.Body)
-
-// 	if resp.StatusCode != http.StatusOK {
-// 		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.StatusCode, string(body))
-// 	}
-
-// 	return
-// }
-
-func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
+func (c *tConn) writeBatchClickhouse(batch []*rpb.Event) (err error) {
 	rr, wr := io.Pipe()
 	go func() {
 		defer wr.Close()
@@ -451,7 +413,7 @@ func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
 
 	req := fh.AcquireRequest()
 	resp := fh.AcquireResponse()
-	
+
 	defer func() {
 		fh.ReleaseRequest(req)
 		fh.ReleaseResponse(resp)
@@ -462,11 +424,11 @@ func (c *tConn) writeBatchClickhouse(batch []*Event) (err error) {
 	req.SetRequestURI(c.url)
 
 	if err = c.httpCli.Do(req, resp); err != nil {
- 		return fmt.Errorf("HTTP request failed: %s", err)
+		return fmt.Errorf("HTTP request failed: %s", err)
 	}
 
 	if resp.Header.StatusCode() != 200 {
- 		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.Header.StatusCode(), string(resp.Body()))
+		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.Header.StatusCode(), string(resp.Body()))
 	}
 
 	return

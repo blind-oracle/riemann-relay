@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	"github.com/gorilla/websocket"
 
 	pb "github.com/golang/protobuf/proto"
@@ -25,7 +26,7 @@ var (
 	}
 )
 
-type hFunc func([]*Event)
+type hFunc func([]*rpb.Event)
 
 type wsError struct {
 	Error string
@@ -242,7 +243,7 @@ func (i *input) handleTCPConnection(c net.Conn) {
 }
 
 func (i *input) sendReply(ok bool, reason string, c net.Conn) error {
-	msg := &Msg{
+	msg := &rpb.Msg{
 		Ok:    ok,
 		Error: reason,
 	}
@@ -298,7 +299,7 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 	var (
 		wsMsgType int
 		wsMsg     []byte
-		ev        *Event
+		ev        *rpb.Event
 	)
 
 	sendWSError := func(msg string) error {
@@ -333,7 +334,7 @@ func (i *input) hanleWebsocketConnection(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 
-		i.sendEvents([]*Event{ev})
+		i.sendEvents([]*rpb.Event{ev})
 		if err = c.WriteMessage(websocket.TextMessage, []byte(`{}`)); err != nil {
 			return
 		}
@@ -380,7 +381,7 @@ func (i *input) readTCPMessage(c net.Conn) (err error) {
 		return fmt.Errorf("Unable to read Protobuf body: %s", err)
 	}
 
-	msg := &Msg{}
+	msg := &rpb.Msg{}
 	if err = pb.Unmarshal(buf, msg); err != nil {
 		i.Errorf("Unable to unmarshal Protobuf message: %s", err)
 		// Don't disconnect just because of unmarshal error
@@ -392,7 +393,7 @@ func (i *input) readTCPMessage(c net.Conn) (err error) {
 	return i.sendReply(true, "", c)
 }
 
-func (i *input) sendEvents(events []*Event) {
+func (i *input) sendEvents(events []*rpb.Event) {
 	atomic.AddUint64(&i.stats.receivedBatches, 1)
 	atomic.AddUint64(&i.stats.receivedEvents, uint64(len(events)))
 
