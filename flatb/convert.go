@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	maxBatchSize = 1024
+	maxBatchSize = 2048
 	maxAttrs     = 64
 )
 
