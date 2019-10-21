@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
+	fb "github.com/google/flatbuffers/go"
 )
 
 type outputAlgo uint8
@@ -53,6 +54,7 @@ const (
 	outputTypeCarbon outputType = iota
 	outputTypeRiemann
 	outputTypeClickhouse
+	outputTypeFlatbuf
 )
 
 const (
@@ -86,6 +88,7 @@ var (
 		"carbon":     outputTypeCarbon,
 		"riemann":    outputTypeRiemann,
 		"clickhouse": outputTypeClickhouse,
+		"flatbuf":    outputTypeFlatbuf,
 	}
 
 	outputAlgoMap = map[string]outputAlgo{
@@ -128,6 +131,12 @@ var (
 	bufferPoolSmall = sync.Pool{
 		New: func() interface{} {
 			return bytes.NewBuffer(make([]byte, 0, 128))
+		},
+	}
+
+	flatbufPoolSmall = sync.Pool{
+		New: func() interface{} {
+			return fb.NewBuilder(524288)
 		},
 	}
 )
@@ -356,14 +365,6 @@ func eventGetTime(e *rpb.Event) int64 {
 
 	return e.Time
 }
-
-// func eventToCarbon(w io.Writer, e *Event, cf []riemannFieldName, cv riemannValue) []byte {
-
-// 	b.Reset()
-// 	bufferPool.Put(b)
-
-// 	return b.Bytes()
-// }
 
 func guessProto(addr string) (proto string) {
 	if _, err := net.ResolveTCPAddr("tcp", addr); err == nil {

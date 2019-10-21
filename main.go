@@ -66,6 +66,7 @@ func main() {
 		outputs[c.Name] = o
 		outputNames = append(outputNames, c.Name)
 	}
+
 	sort.Strings(outputNames)
 	l.Warnf("Outputs started: %d", len(outputs))
 
@@ -93,6 +94,7 @@ func main() {
 		inputs[c.Name] = i
 		inputNames = append(inputNames, c.Name)
 	}
+
 	sort.Strings(inputNames)
 	l.Warnf("Inputs started: %d", len(inputs))
 

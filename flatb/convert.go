@@ -18,8 +18,16 @@ func MetricFromRiemannEvents(b *fb.Builder, evs []*rpb.Event) {
 	)
 
 	mcnt := len(evs)
+	if mcnt > maxBatchSize {
+		panic("Max batch size reached")
+	}
+
 	for i, ev := range evs {
 		acnt := len(ev.Attributes)
+		if acnt > maxAttrs {
+			panic("Max attr count reached")
+		}
+
 		for j, a := range ev.Attributes {
 			key := b.CreateString(a.Key)
 			value := b.CreateString(a.Value)
@@ -58,7 +66,15 @@ func MetricFromRiemannEvents(b *fb.Builder, evs []*rpb.Event) {
 		MetricAddService(b, svc)
 		MetricAddState(b, state)
 		MetricAddDescription(b, descr)
-		MetricAddValue(b, ev.MetricD)
+
+		if ev.MetricD > 0 {
+			MetricAddValue(b, ev.MetricD)
+		} else if ev.MetricF > 0 {
+			MetricAddValue(b, float64(ev.MetricD))
+		} else {
+			MetricAddValue(b, float64(ev.MetricSint64))
+		}
+
 		MetricAddTime(b, ev.Time)
 		MetricAddAttrs(b, attrs)
 		MetricAddTags(b, tags)

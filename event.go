@@ -47,16 +47,6 @@ func eventFromJSON(msg []byte) (ev *rpb.Event, err error) {
 		return
 	}
 
-	// ev = &Event{
-	// 	Host:        pb.String(evJS.Host),
-	// 	Service:     pb.String(evJS.Service),
-	// 	State:       pb.String(evJS.State),
-	// 	Description: pb.String(evJS.Description),
-	// 	MetricD:     pb.Float64(evJS.Metric),
-	// 	Tags:        evJS.Tags,
-	// 	Ttl:         pb.Float32(evJS.TTL),
-	// }
-
 	ev = &rpb.Event{
 		Host:        evJS.Host,
 		Service:     evJS.Service,

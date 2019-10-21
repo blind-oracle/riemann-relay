@@ -65,6 +65,8 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 			logger: &logger{fmt.Sprintf("%s: %s[%d]", cf.Name, h, i)},
 		}
 
+		t.conns = append(t.conns, c)
+
 		c.batch.buf = make([]*rpb.Event, cf.BatchSize)
 		c.batch.size = cf.BatchSize
 		c.batch.timeout = cf.BatchTimeout.Duration
@@ -84,16 +86,8 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 		case outputTypeRiemann:
 			c.timeoutRead = cf.TimeoutRead.Duration
 			c.writeBatch = c.writeBatchRiemann
-		case outputTypeClickhouse:
-			if cf.CHTable == "" {
-				return nil, fmt.Errorf("You need to specify 'ch_table'")
-			}
-
+		case outputTypeClickhouse, outputTypeFlatbuf:
 			c.alive = true
-			c.writeBatch = c.writeBatchClickhouse
-			// c.httpCli = &http.Client{
-			// 	Timeout: c.timeoutWrite,
-			// }
 
 			c.httpCli = &fh.Client{
 				WriteTimeout: c.timeoutWrite,
@@ -101,16 +95,25 @@ func newOutputTgt(h string, cf *outputCfg, o *output) (*target, error) {
 
 			u, err := url.Parse(h)
 			if err != nil {
-				return nil, fmt.Errorf("Unable to parse Clickhouse URL '%s': %s", h, err)
+				return nil, fmt.Errorf("Unable to parse URL '%s': %s", h, err)
 			}
 
-			q := u.Query()
-			q.Set("query", fmt.Sprintf("INSERT INTO %s FORMAT RowBinary", cf.CHTable))
-			u.RawQuery = q.Encode()
+			if o.typ == outputTypeClickhouse {
+				c.writeBatch = c.writeBatchClickhouse
+
+				if cf.CHTable == "" {
+					return nil, fmt.Errorf("You need to specify 'ch_table'")
+				}
+
+				q := u.Query()
+				q.Set("query", fmt.Sprintf("INSERT INTO %s FORMAT RowBinary", cf.CHTable))
+				u.RawQuery = q.Encode()
+			} else {
+				c.writeBatch = c.writeBatchFlatbuf
+			}
+
 			c.url = u.String()
 		}
-
-		t.conns = append(t.conns, c)
 
 		switch o.typ {
 		case outputTypeRiemann, outputTypeCarbon:

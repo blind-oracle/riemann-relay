@@ -169,6 +169,13 @@ func newOutput(c *outputCfg) (o *output, err error) {
 
 		tgt.id = id
 		o.tgts = append(o.tgts, tgt)
+
+		switch typ {
+		case outputTypeClickhouse, outputTypeFlatbuf:
+			for _, conn := range tgt.conns {
+				tgt.setConnAlive(conn.id, true)
+			}
+		}
 	}
 
 	if cfg.StatsInterval.Duration > 0 {

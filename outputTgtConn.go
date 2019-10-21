@@ -12,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/blind-oracle/riemann-relay/flatb"
 	rpb "github.com/blind-oracle/riemann-relay/riemannpb"
 	pb "github.com/golang/protobuf/proto"
+	fb "github.com/google/flatbuffers/go"
 	fh "github.com/valyala/fasthttp"
 )
 
@@ -419,9 +421,39 @@ func (c *tConn) writeBatchClickhouse(batch []*rpb.Event) (err error) {
 		fh.ReleaseResponse(resp)
 	}()
 
-	req.SetBodyStream(rr, -1)
 	req.Header.SetMethod("POST")
 	req.SetRequestURI(c.url)
+	req.SetBodyStream(rr, -1)
+
+	if err = c.httpCli.Do(req, resp); err != nil {
+		return fmt.Errorf("HTTP request failed: %s", err)
+	}
+
+	if resp.Header.StatusCode() != 200 {
+		return fmt.Errorf("HTTP code is not 200: %d (%s)", resp.Header.StatusCode(), string(resp.Body()))
+	}
+
+	return
+}
+
+func (c *tConn) writeBatchFlatbuf(batch []*rpb.Event) (err error) {
+	fbb := flatbufPoolSmall.Get().(*fb.Builder)
+	req := fh.AcquireRequest()
+	resp := fh.AcquireResponse()
+
+	defer func() {
+		fbb.Reset()
+		flatbufPoolSmall.Put(fbb)
+		fh.ReleaseRequest(req)
+		fh.ReleaseResponse(resp)
+	}()
+
+	flatb.MetricFromRiemannEvents(fbb, batch)
+	body := fbb.FinishedBytes()
+
+	req.Header.SetMethod("POST")
+	req.SetRequestURI(c.url)
+	req.SetBody(body)
 
 	if err = c.httpCli.Do(req, resp); err != nil {
 		return fmt.Errorf("HTTP request failed: %s", err)
