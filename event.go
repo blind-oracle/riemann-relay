@@ -28,6 +28,8 @@ type eventJSON struct {
 }
 
 var (
+	// List of valid fields in an event
+	// Others will be treated as attributes
 	eventJSONFields = map[string]bool{
 		"host":        true,
 		"service":     true,

@@ -228,13 +228,24 @@ func (c *tConn) dispatch() {
 			}
 
 		case e = <-c.chanIn:
-			c.connMtx.Lock()
+			if c.httpCli == nil {
+				c.connMtx.Lock()
+			}
+
 			if err = c.push(e); err != nil {
 				c.Errorf("Unable to flush batch: %s", err)
-				// Requeue the event
-				c.chanIn <- e
+				// Try to requeue the event
+				select {
+				case c.chanIn <- e:
+				default:
+				}
+
+				time.Sleep(1 * time.Second)
 			}
-			c.connMtx.Unlock()
+
+			if c.httpCli == nil {
+				c.connMtx.Unlock()
+			}
 		}
 	}
 }
@@ -276,9 +287,15 @@ func (c *tConn) periodicFlush() {
 	for {
 		select {
 		case <-tick.C:
-			c.connMtx.Lock()
+			if c.httpCli == nil {
+				c.connMtx.Lock()
+			}
+
 			c.tryFlush()
-			c.connMtx.Unlock()
+
+			if c.httpCli == nil {
+				c.connMtx.Unlock()
+			}
 
 		case <-c.ctx.Done():
 			return
@@ -330,6 +347,7 @@ func (c *tConn) close() {
 	c.wg.Wait()
 
 	if c.httpCli == nil {
+		c.Infof("Closing connection...")
 		c.disconnect()
 	}
 
@@ -404,6 +422,7 @@ func (c *tConn) writeBatchRiemann(batch []*rpb.Event) (err error) {
 
 func (c *tConn) writeBatchClickhouse(batch []*rpb.Event) (err error) {
 	rr, wr := io.Pipe()
+
 	go func() {
 		defer wr.Close()
 		for _, e := range batch {
@@ -437,13 +456,13 @@ func (c *tConn) writeBatchClickhouse(batch []*rpb.Event) (err error) {
 }
 
 func (c *tConn) writeBatchFlatbuf(batch []*rpb.Event) (err error) {
-	fbb := flatbufPoolSmall.Get().(*fb.Builder)
+	fbb := flatbufPool.Get().(*fb.Builder)
 	req := fh.AcquireRequest()
 	resp := fh.AcquireResponse()
 
 	defer func() {
 		fbb.Reset()
-		flatbufPoolSmall.Put(fbb)
+		flatbufPool.Put(fbb)
 		fh.ReleaseRequest(req)
 		fh.ReleaseResponse(resp)
 	}()

@@ -134,7 +134,7 @@ var (
 		},
 	}
 
-	flatbufPoolSmall = sync.Pool{
+	flatbufPool = sync.Pool{
 		New: func() interface{} {
 			return fb.NewBuilder(524288)
 		},
